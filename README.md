@@ -7,9 +7,9 @@ A Swift-based server application designed to provide an OpenAI-compatible text c
 To run the server:
 
 ```
-swift-mlx-server --model path/to/your/model --host 127.0.0.1 --port 8080
+swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080
 ```
-Replace `path/to/your/model` with the actual path to your model files or an Hugging Face model ID. Adjust the host and port as necessary to fit your setup.
+Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup.
 
 
 # API Endpoints
