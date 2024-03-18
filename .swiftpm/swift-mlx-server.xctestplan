@@ -1,0 +1,26 @@
+{
+  "configurations" : [
+    {
+      "id" : "BF3F6D40-C433-4F76-9A00-6E9A9DC39568",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "commandLineArgumentEntries" : [
+
+    ],
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:",
+      "identifier" : "swift-mlx-server",
+      "name" : "swift-mlx-server"
+    }
+  },
+  "testTargets" : [
+
+  ],
+  "version" : 1
+}
