@@ -33,11 +33,11 @@ func routes(_ app: Application, _ modelPath: String) async throws {
     let (model, tokenizer) = try await load(configuration: modelConfiguration)
     
     @Sendable @MainActor
-    func generate_step_stream(_ promptTokens:[Int], _ maxTokens: Int,_ temperature: Float) async throws -> AsyncStream<Int> {
+    func generate_step_stream(_ promptTokens:[Int], _ maxTokens: Int,_ temperature: Float, _ topP: Float) async throws -> AsyncStream<Int> {
         return AsyncStream { continuation in
             var tokens = [Int]()
             
-            for token in TokenIterator(prompt: MLXArray(promptTokens), model: model, temp: temperature) {
+            for token in TokenIterator(prompt: MLXArray(promptTokens), model: model, temp: temperature, topP: topP) {
                 let t = token.item(Int.self)
                 if t == tokenizer.unknownTokenId || t == tokenizer.eosTokenId {
                     break
@@ -60,6 +60,7 @@ func routes(_ app: Application, _ modelPath: String) async throws {
         
         let maxTokens = completionRequest.maxTokens
         let temperature = completionRequest.temperature
+        let topP = completionRequest.topP ?? 1.0
         let requestedModel = completionRequest.model ?? "default_model"
         let stream = completionRequest.stream ?? false
         let stopWords:[String] = completionRequest.stop ?? []
@@ -73,7 +74,7 @@ func routes(_ app: Application, _ modelPath: String) async throws {
             response.body = .init(stream: { writer in
                 Task {
                     do {
-                        let stream_res = try await generate_step_stream(promptTokens, maxTokens, temperature)
+                        let stream_res = try await generate_step_stream(promptTokens, maxTokens, temperature, topP)
                         let maxStopIdSequenceLen = stopIdSequences.map { $0.count }.max() ?? 0
                         var tokens: [Int] = []
                         var currentGeneratedTextIndex = 0
@@ -127,7 +128,7 @@ func routes(_ app: Application, _ modelPath: String) async throws {
         } else {
             var generatedTokens: [Int] = []
             
-            let stream_res = try await generate_step_stream(promptTokens, maxTokens, temperature)
+            let stream_res = try await generate_step_stream(promptTokens, maxTokens, temperature, topP)
             for try await value in stream_res {
                 generatedTokens.append(value)
                 let stopCondition = stoppingCriteria(tokens: generatedTokens, stopIdSequences: stopIdSequences, eosTokenId: eosTokenId)
