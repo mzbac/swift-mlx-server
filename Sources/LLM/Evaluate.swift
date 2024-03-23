@@ -16,8 +16,11 @@ private func sample(logits: MLXArray, temp: Float, topP: Float = 1.0) -> MLXArra
       }
 
       let probs = softMax(logits / temp, axis: -1)
-      let sortedProbs = sorted(probs, axis: -1)
       let sortedIndices = argSort(probs, axis: -1)
+
+      // probs shape is [B,V] and after take it will be [1, B, V], so we squeeze it back to [B, V]
+      let sortedProbs = take(probs, sortedIndices, axis: -1).squeezed(axis: 0)
+
       let cumulativeProbs = cumsum(sortedProbs, axis: -1)
 
       let topProbs = MLX.where(cumulativeProbs .> (1 - topP), sortedProbs, zeros(like: sortedProbs))
