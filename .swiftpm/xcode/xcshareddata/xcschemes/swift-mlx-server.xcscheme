@@ -57,6 +57,10 @@
       <CommandLineArguments>
          <CommandLineArgument
             argument = "--model mlx-community/Mistral-7B-Instruct-v0.2-4bit-mlx"
+            isEnabled = "NO">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "--model mlx-community/c4ai-command-r-v01-4bit"
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
