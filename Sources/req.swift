@@ -10,6 +10,8 @@ struct CompletionRequest: Content {
   let stream: Bool?
   let logprobs: Int?
   let stop: [String]?
+  let repetitionPenalty: Float?
+  let repetitionContextSize: Int?
 
   enum CodingKeys: String, CodingKey {
     case model
@@ -21,5 +23,7 @@ struct CompletionRequest: Content {
     case stream
     case logprobs
     case stop
+    case repetitionPenalty = "repetition_penalty"
+    case repetitionContextSize = "repetition_context_size"
   }
 }

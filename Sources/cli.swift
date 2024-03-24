@@ -37,13 +37,13 @@ func routes(_ app: Application, _ modelPath: String) async throws {
 
   @Sendable @MainActor
   func generate_step_stream(
-    _ promptTokens: [Int], _ maxTokens: Int, _ temperature: Float, _ topP: Float
+    _ promptTokens: [Int], _ maxTokens: Int, _ temperature: Float, _ topP: Float, _ repetitionPenalty: Float = 1.0, _ repetitionContextSize: Int = 20
   ) async throws -> AsyncStream<Int> {
     return AsyncStream { continuation in
       var tokens = [Int]()
 
       for token in TokenIterator(
-        prompt: MLXArray(promptTokens), model: model, temp: temperature, topP: topP)
+        prompt: MLXArray(promptTokens), model: model, temp: temperature, topP: topP, repetitionPenalty: repetitionPenalty, repetitionContextSize: repetitionContextSize)
       {
         let t = token.item(Int.self)
         if t == tokenizer.unknownTokenId || t == tokenizer.eosTokenId {
@@ -73,6 +73,8 @@ func routes(_ app: Application, _ modelPath: String) async throws {
     let stopWords: [String] = completionRequest.stop ?? []
     let stopIdSequences = stopWords.map { Array(tokenizer.encode(text: $0).dropFirst()) }
     let eosTokenId = tokenizer.eosTokenId!
+    let repetitionPenalty = completionRequest.repetitionPenalty ?? 1.0
+    let repetitionContextSize = completionRequest.repetitionContextSize ?? 20
 
     if stream {
       let headers = HTTPHeaders([
@@ -84,7 +86,7 @@ func routes(_ app: Application, _ modelPath: String) async throws {
         Task {
           do {
             let stream_res = try await generate_step_stream(
-              promptTokens, maxTokens, temperature, topP)
+              promptTokens, maxTokens, temperature, topP, repetitionPenalty, repetitionContextSize)
             let maxStopIdSequenceLen = stopIdSequences.map { $0.count }.max() ?? 0
             var tokens: [Int] = []
             var currentGeneratedTextIndex = 0
@@ -149,7 +151,7 @@ func routes(_ app: Application, _ modelPath: String) async throws {
     } else {
       var generatedTokens: [Int] = []
 
-      let stream_res = try await generate_step_stream(promptTokens, maxTokens, temperature, topP)
+      let stream_res = try await generate_step_stream(promptTokens, maxTokens, temperature, topP, repetitionPenalty, repetitionContextSize)
       for try await value in stream_res {
         generatedTokens.append(value)
         let stopCondition = stoppingCriteria(
