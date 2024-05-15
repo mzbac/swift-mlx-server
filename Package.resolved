@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/async-http-client.git",
       "state" : {
-        "revision" : "291438696abdd48d2a83b52465c176efbd94512b",
-        "version" : "1.20.1"
+        "revision" : "a22083713ee90808d527d0baa290c2fb13ca3096",
+        "version" : "1.21.1"
       }
     },
     {
@@ -23,8 +23,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/console-kit.git",
       "state" : {
-        "revision" : "a31f44ebfbd15a2cc0fda705279676773ac16355",
-        "version" : "4.14.1"
+        "revision" : "9c24ac496c97cfb49c1bd5e7162008bb50abafc8",
+        "version" : "4.14.2"
+      }
+    },
+    {
+      "identity" : "gzipswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/1024jp/GzipSwift",
+      "state" : {
+        "revision" : "731037f6cc2be2ec01562f6597c1d0aa3fe6fd05",
+        "version" : "6.0.1"
       }
     },
     {
@@ -33,7 +42,16 @@
       "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
         "branch" : "main",
-        "revision" : "a1c544c817d44cfdfa1a650f521066b565c2ae4f"
+        "revision" : "3c802c808d281c191d5f26f37a4f93135d8ca119"
+      }
+    },
+    {
+      "identity" : "mlx-swift-examples",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ml-explore/mlx-swift-examples/",
+      "state" : {
+        "branch" : "main",
+        "revision" : "ff7610d522a57e403140e8431ebd6d032dcdb86c"
       }
     },
     {
@@ -50,8 +68,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/routing-kit.git",
       "state" : {
-        "revision" : "2a92a7eac411a82fb3a03731be5e76773ebe1b3e",
-        "version" : "4.9.0"
+        "revision" : "8c9a227476555c55837e569be71944e02a056b72",
+        "version" : "4.9.1"
       }
     },
     {
@@ -104,8 +122,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-crypto.git",
       "state" : {
-        "revision" : "f0525da24dc3c6cbb2b6b338b65042bc91cbc4bb",
-        "version" : "3.3.0"
+        "revision" : "bc1c29221f6dfeb0ebbfbc98eb95cd3d4967868e",
+        "version" : "3.4.0"
       }
     },
     {
@@ -113,8 +131,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-http-types",
       "state" : {
-        "revision" : "12358d55a3824bd5fed310b999ea8cf83a9a1a65",
-        "version" : "1.0.3"
+        "revision" : "9bee2fdb79cc740081abd8ebd80738063d632286",
+        "version" : "1.1.0"
       }
     },
     {
@@ -131,8 +149,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-metrics.git",
       "state" : {
-        "revision" : "971ba26378ab69c43737ee7ba967a896cb74c0d1",
-        "version" : "2.4.1"
+        "revision" : "ce594e71e92a1610015017f83f402894df540e51",
+        "version" : "2.4.4"
       }
     },
     {
@@ -140,8 +158,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio.git",
       "state" : {
-        "revision" : "fc63f0cf4e55a4597407a9fc95b16a2bc44b4982",
-        "version" : "2.64.0"
+        "revision" : "359c461e5561d22c6334828806cc25d759ca7aa6",
+        "version" : "2.65.0"
       }
     },
     {
@@ -158,8 +176,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio-http2.git",
       "state" : {
-        "revision" : "0904bf0feb5122b7e5c3f15db7df0eabe623dd87",
-        "version" : "1.30.0"
+        "revision" : "c6afe04165c865faaa687b42c32ed76dfcc91076",
+        "version" : "1.31.0"
       }
     },
     {
@@ -176,8 +194,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio-transport-services.git",
       "state" : {
-        "revision" : "6cbe0ed2b394f21ab0d46b9f0c50c6be964968ce",
-        "version" : "1.20.1"
+        "revision" : "38ac8221dd20674682148d6451367f89c2652980",
+        "version" : "1.21.0"
       }
     },
     {
@@ -203,8 +221,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-transformers",
       "state" : {
-        "revision" : "74b94211bdc741694ed7e700a1104c72e5ba68fe",
-        "version" : "0.1.7"
+        "revision" : "fc6543263e4caed9bf6107466d625cfae9357f08",
+        "version" : "0.1.8"
       }
     },
     {
@@ -212,8 +230,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/vapor.git",
       "state" : {
-        "revision" : "11cdb29614a5c7f8c5289f3c97b3398c3d89b395",
-        "version" : "4.92.5"
+        "revision" : "90da64ad52ee595d199212338b89995bcab99d0e",
+        "version" : "4.100.0"
       }
     },
     {
