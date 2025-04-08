@@ -3,8 +3,8 @@ import Vapor
 struct CompletionRequest: Content {
   let model: String?
   let prompt: String
-  let maxTokens: Int
-  let temperature: Float
+  let maxTokens: Int?
+  let temperature: Float?
   let topP: Float?
   let n: Int?
   let stream: Bool?
@@ -26,4 +26,15 @@ struct CompletionRequest: Content {
     case repetitionPenalty = "repetition_penalty"
     case repetitionContextSize = "repetition_context_size"
   }
+}
+
+enum GenerationDefaults {
+  static let model = "default_model"
+  static let maxTokens = 128
+  static let temperature: Float = 0.8
+  static let topP: Float = 1.0
+  static let stream = false
+  static let repetitionPenalty: Float = 1.0
+  static let repetitionContextSize = 20
+  static let stopSequences: [String] = []
 }

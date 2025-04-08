@@ -1,12 +1,24 @@
+import Foundation
 import Vapor
 
 struct CompletionResponse: Content {
   let id: String
-  let object: String
+  let object: String = StructureConstants.completionObject
   let created: Int
   let model: String
   let choices: [CompletionChoice]
   let usage: CompletionUsage
+
+  init(
+    id: String = "cmpl-\(UUID().uuidString)", model: String, choices: [CompletionChoice],
+    usage: CompletionUsage
+  ) {
+    self.id = id
+    self.created = Int(Date().timeIntervalSince1970)
+    self.model = model
+    self.choices = choices
+    self.usage = usage
+  }
 }
 
 struct CompletionChoice: Content {
@@ -14,6 +26,13 @@ struct CompletionChoice: Content {
   let index: Int
   let logprobs: [String: Double]?
   let finishReason: String?
+
+  init(text: String, index: Int = 0, logprobs: [String: Double]? = nil, finishReason: String?) {
+    self.text = text
+    self.index = index
+    self.logprobs = logprobs
+    self.finishReason = finishReason
+  }
 }
 
 struct CompletionUsage: Content {
@@ -24,7 +43,7 @@ struct CompletionUsage: Content {
 
 struct CompletionChunkResponse: Content {
   let id: String
-  var object: String = "text_completion"
+  let object: String = StructureConstants.completionObject
   let created: Int
   let choices: [Choice]
   let model: String
@@ -32,16 +51,29 @@ struct CompletionChunkResponse: Content {
 
   struct Choice: Content {
     let text: String
-    var index: Int = 0
-    var logprobs: String? = nil
-    var finishReason: String? = nil
+    let index: Int = 0
+    var logprobs: String?
+    var finishReason: String?
   }
 
-  init(completionId: String, requestedModel: String, nextChunk: String) {
+  /// Initializes a new completion chunk.
+  /// - Parameters:
+  ///   - completionId: The unique ID for the completion stream.
+  ///   - requestedModel: The model used for generation.
+  ///   - nextChunk: The text content of this chunk.
+  ///   - systemFingerprint: A unique fingerprint for the system generating the response.
+  init(
+    completionId: String, requestedModel: String, nextChunk: String,
+    systemFingerprint: String = "fp_\(UUID().uuidString)"
+  ) {
     self.id = completionId
     self.created = Int(Date().timeIntervalSince1970)
     self.choices = [Choice(text: nextChunk)]
     self.model = requestedModel
-    self.systemFingerprint = "fp_\(UUID().uuidString)"
+    self.systemFingerprint = systemFingerprint
   }
+}
+
+enum StructureConstants {
+  static let completionObject = "text_completion"
 }
