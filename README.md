@@ -11,23 +11,113 @@ swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080
 ```
 Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup.
 
-
 # API Endpoints
 
-- `POST /v1/completions`:Generates and returns a text completion for the given prompt. For request details and parameters, refer to the OpenAI API Completions documentation https://platform.openai.com/docs/api-reference/completions/create.
+The server provides two main endpoints:
 
-## Request Fields
+## Text Completions
 
-- stop: (Optional) An array of strings or a single string. Thesse are sequences of tokens on which the generation should stop.
+- `POST /v1/completions`: Generates and returns a text completion for the given prompt.
 
-- max_tokens: (Optional) An integer specifying the maximum number of tokens to generate. Defaults to 100.
+### Request Body
 
-- stream: (Optional) A boolean indicating if the response should be streamed. If true, responses are sent as they are generated. Defaults to false.
+```json
+{
+  "model": "model-name",
+  "prompt": "Your text prompt goes here",
+  "max_tokens": 100,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "stream": false,
+  "stop": ["###", "END"],
+  "repetition_penalty": 1.1,
+  "repetition_context_size": 20
+}
+```
 
-- temperature: (Optional) A float specifying the sampling temperature. Defaults to 1.0.
+### Response
 
-- top_p: (Optional) A float specifying the nucleus sampling parameter. Defaults to 1.0.
+```json
+{
+  "model": "model-name",
+  "choices": [
+    {
+      "text": "Generated completion text",
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 42,
+    "total_tokens": 52
+  }
+}
+```
 
-- repetition_penalty: (Optional) Applies a penalty to repeated tokens. Defaults to 1.0.
+## Chat Completions
 
-- repetition_context_size: (Optional) The size of the context window for applying repetition penalty. Defaults to 20.
+- `POST /v1/chat/completions`: Generates a response based on a series of messages in a conversation.
+
+### Request Body
+
+```json
+{
+  "model": "model-name",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello, what can you help me with?"}
+  ],
+  "max_tokens": 100,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "stream": false,
+  "stop": ["###", "END"],
+  "repetition_penalty": 1.1,
+  "repetition_context_size": 20
+}
+```
+
+### Response
+
+```json
+{
+  "id": "chatcmpl-123456",
+  "created": 1689809600,
+  "model": "model-name",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "I'm an AI assistant and I can help with a variety of tasks..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 23,
+    "completion_tokens": 42,
+    "total_tokens": 65
+  }
+}
+```
+
+## Request Parameters
+
+Both endpoints accept the following parameters:
+
+- `model` (Optional): The model to use for generation. If not provided, the server uses the model specified at startup.
+
+- `stop` (Optional): An array of strings or a single string. These are sequences of tokens on which the generation should stop.
+
+- `max_tokens` (Optional): An integer specifying the maximum number of tokens to generate. Defaults to 100.
+
+- `stream` (Optional): A boolean indicating if the response should be streamed. If true, responses are sent as they are generated. Defaults to false.
+
+- `temperature` (Optional): A float specifying the sampling temperature. Higher values like 0.8 make output more random, lower values like 0.2 make it more deterministic. Defaults to 0.7.
+
+- `top_p` (Optional): A float specifying the nucleus sampling parameter. Defaults to 0.9.
+
+- `repetition_penalty` (Optional): Applies a penalty to repeated tokens to reduce repetition. Defaults to 1.0.
+
+- `repetition_context_size` (Optional): The size of the context window for applying repetition penalty. Defaults to 20.
