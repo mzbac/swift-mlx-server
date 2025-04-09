@@ -31,7 +31,8 @@ jobs:
           cd ./dist/Build/Products/Release
           mv swift-mlx-server mlx-server
           chmod +x mlx-server
-          zip -r mlx-server.macos.arm64.zip mlx-server
+          cp mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib .
+          zip -r mlx-server.macos.arm64.zip mlx-server default.metallib
 
       - name: Get current date
         run: echo "CURRENT_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
