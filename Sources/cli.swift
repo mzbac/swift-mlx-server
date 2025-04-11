@@ -113,6 +113,17 @@ struct MLXServer: AsyncParsableCommand {
         let app = Application(env)
         defer { app.logger.info("Server shutting down."); app.shutdown() }
 
+        let corsConfiguration = CORSMiddleware.Configuration(
+            allowedOrigin: .all,
+            allowedMethods: [.GET, .POST, .OPTIONS],
+            allowedHeaders: [
+                .accept, .authorization, .contentType, .origin, 
+                .xRequestedWith, .userAgent, .accessControlAllowOrigin
+            ]
+        )
+        let corsMiddleware = CORSMiddleware(configuration: corsConfiguration)
+        app.middleware.use(corsMiddleware)
+
         try await routes(app, model)
 
         app.http.server.configuration.hostname = host
