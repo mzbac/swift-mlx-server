@@ -42,22 +42,21 @@ func checkStoppingCriteria(tokens: [Int], stopIdSequences: [[Int]], eosTokenId: 
     return StopCondition(stopMet: false, trimLength: 0)
 }
 
-func encodeSSE(chunkResponse: CompletionChunkResponse, logger: Logger) -> String? {
+func encodeSSE<T: Encodable>(response: T, logger: Logger) -> String? {
     do {
-        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys; encoder.keyEncodingStrategy = .convertToSnakeCase
-        let jsonData = try encoder.encode(chunkResponse)
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else { logger.error("Failed encodeSSE utf8"); return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let jsonData = try encoder.encode(response)
+        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
+            logger.error("Failed encodeSSE utf8")
+            return nil
+        }
         return AppConstants.sseEventHeader + jsonString + AppConstants.sseEventSeparator
-    } catch { logger.error("Failed encodeSSE: \(error)"); return nil }
-}
-
-func encodeChatSSE(chunkResponse: ChatCompletionChunkResponse, logger: Logger) -> String? {
-     do {
-        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys; encoder.keyEncodingStrategy = .convertToSnakeCase
-        let jsonData = try encoder.encode(chunkResponse)
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else { logger.error("Failed encodeChatSSE utf8"); return nil }
-        return AppConstants.sseEventHeader + jsonString + AppConstants.sseEventSeparator
-    } catch { logger.error("Failed encodeChatSSE: \(error)"); return nil }
+    } catch {
+        logger.error("Failed encodeSSE: \(error)")
+        return nil
+    }
 }
 
 func routes(_ app: Application, _ modelPath: String) async throws {

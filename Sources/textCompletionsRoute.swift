@@ -95,7 +95,7 @@ func registerTextCompletionsRoute(
                                  let newTextChunk = String(decodedText[startIndex...])
                                  if !newTextChunk.isEmpty && !newTextChunk.allSatisfy({ $0.unicodeScalars.first?.value == AppConstants.replacementChar.unicodeScalars.first?.value }) {
                                      let chunkResponse = CompletionChunkResponse(completionId: completionId, requestedModel: reqModelName, nextChunk: newTextChunk)
-                                     if let sseString = encodeSSE(chunkResponse: chunkResponse, logger: logger) {
+                                     if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
                                          try await writer.write(.buffer(.init(string: sseString)))
                                          currentSentTextIndex = decodedText.count
                                      }

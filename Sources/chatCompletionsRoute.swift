@@ -106,7 +106,7 @@ func registerChatCompletionsRoute(
                         let initialDelta = ChatCompletionDelta(role: "assistant", content: "")
                         let initialChoice = ChatCompletionChoiceDelta(index: 0, delta: initialDelta, finishReason: nil)
                         let initialChunk = ChatCompletionChunkResponse(id: chatId, created: created, model: reqModelName, systemFingerprint: systemFingerprint, choices: [initialChoice])
-                        if let initialSse = encodeChatSSE(chunkResponse: initialChunk, logger: logger) {
+                        if let initialSse = encodeSSE(response: initialChunk, logger: logger) {
                             try await writer.write(.buffer(.init(string: initialSse)))
                         }
 
@@ -128,7 +128,7 @@ func registerChatCompletionsRoute(
                                      let delta = ChatCompletionDelta(role: nil, content: newTextChunk)
                                      let choice = ChatCompletionChoiceDelta(index: 0, delta: delta, finishReason: nil)
                                      let chunkResponse = ChatCompletionChunkResponse(id: chatId, created: created, model: reqModelName, systemFingerprint: systemFingerprint, choices: [choice])
-                                     if let sseString = encodeChatSSE(chunkResponse: chunkResponse, logger: logger) {
+                                     if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
                                          try await writer.write(.buffer(.init(string: sseString)))
                                          currentSentTextIndex = decodedText.count
                                      }
@@ -141,7 +141,7 @@ func registerChatCompletionsRoute(
                         let finalDelta = ChatCompletionDelta(role: nil, content: nil)
                         let finalChoice = ChatCompletionChoiceDelta(index: 0, delta: finalDelta, finishReason: finalFinishReason)
                         let finalChunk = ChatCompletionChunkResponse(id: chatId, created: created, model: reqModelName, systemFingerprint: systemFingerprint, choices: [finalChoice])
-                        if let finalSseString = encodeChatSSE(chunkResponse: finalChunk, logger: logger) {
+                        if let finalSseString = encodeSSE(response: finalChunk, logger: logger) {
                             await writer.write(.buffer(.init(string: finalSseString)))
                         }
 
