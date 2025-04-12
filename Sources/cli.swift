@@ -66,8 +66,21 @@ func routes(_ app: Application, _ modelPath: String) async throws {
     do {
         let modelFactory = LLMModelFactory.shared
         let modelConfiguration: ModelConfiguration
-        if modelPath.hasPrefix("/") { modelConfiguration = ModelConfiguration(directory: URL(filePath: modelPath)); loadedModelName = modelConfiguration.name }
-        else { modelConfiguration = modelFactory.configuration(id: modelPath); loadedModelName = modelConfiguration.name }
+        
+        let expandedPath = NSString(string: modelPath).expandingTildeInPath
+        
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        let modelPathExists = fileManager.fileExists(atPath: expandedPath, isDirectory: &isDirectory)
+        
+        if modelPathExists && isDirectory.boolValue {
+            modelConfiguration = ModelConfiguration(directory: URL(filePath: expandedPath))
+            loadedModelName = modelConfiguration.name
+        } else {
+            modelConfiguration = modelFactory.configuration(id: expandedPath)
+            loadedModelName = modelConfiguration.name
+        }
+        
         modelContainer = try await modelFactory.loadContainer(configuration: modelConfiguration)
         app.logger.info("MLX Model loaded successfully. Identifier: \(loadedModelName)")
     } catch {
