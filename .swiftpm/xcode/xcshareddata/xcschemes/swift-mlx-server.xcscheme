@@ -56,7 +56,7 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "--model mlx-community/Mistral-7B-Instruct-v0.2-4bit-mlx"
+            argument = "--model mlx-community/Qwen2.5-7B-Instruct-1M-8bit"
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
