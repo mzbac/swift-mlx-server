@@ -65,6 +65,7 @@ func registerTextCompletionsRoute(
         let repetitionPenalty = completionRequest.repetitionPenalty ?? GenerationDefaults.repetitionPenalty
         let repetitionContextSize = completionRequest.repetitionContextSize ?? GenerationDefaults.repetitionContextSize
 
+        var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
         if streamResponse {
             let headers = HTTPHeaders([
                 ("Content-Type", "text/event-stream"),
@@ -76,7 +77,6 @@ func registerTextCompletionsRoute(
                 Task {
                     let completionId = "cmpl-\(UUID().uuidString)"
                     var generatedTokens: [Int] = []
-                    var currentSentTextIndex = 0
                     var finalFinishReason: String? = nil
                     do {
                         logger.info("Starting TEXT stream generation (ID: \(completionId))")
@@ -86,21 +86,16 @@ func registerTextCompletionsRoute(
                         )
                         for try await token in tokenStream {
                              generatedTokens.append(token)
+                             detokenizer.append(token: token)
                              let stopCondition = checkStoppingCriteria(tokens: generatedTokens, stopIdSequences: stopIdSequences, eosTokenId: eosTokenId)
                              if stopCondition.stopMet { finalFinishReason = "stop"; break }
 
-                             let decodedText = tokenizer.decode(tokens: generatedTokens)
-                             if decodedText.count > currentSentTextIndex {
-                                 let startIndex = decodedText.index(decodedText.startIndex, offsetBy: currentSentTextIndex)
-                                 let newTextChunk = String(decodedText[startIndex...])
-                                 if !newTextChunk.isEmpty && !newTextChunk.allSatisfy({ $0.unicodeScalars.first?.value == AppConstants.replacementChar.unicodeScalars.first?.value }) {
-                                     let chunkResponse = CompletionChunkResponse(completionId: completionId, requestedModel: reqModelName, nextChunk: newTextChunk)
-                                     if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
-                                         try await writer.write(.buffer(.init(string: sseString)))
-                                         currentSentTextIndex = decodedText.count
-                                     }
-                                 }
-                             }
+                            if let newTextChunk = detokenizer.next() {
+                                let chunkResponse = CompletionChunkResponse(completionId: completionId, requestedModel: reqModelName, nextChunk: newTextChunk)
+                                if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
+                                    try await writer.write(.buffer(.init(string: sseString)))
+                                }
+                            }
                         }
                         if finalFinishReason == nil { finalFinishReason = (generatedTokens.count >= maxTokens) ? "length" : "stop" }
                      } catch { logger.error("Text stream error (ID: \(completionId)): \(error)") }

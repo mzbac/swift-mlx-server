@@ -11,7 +11,6 @@ import Vapor
 enum AppConstants {
     static let defaultHost = "127.0.0.1"
     static let defaultPort = 8080
-    static let replacementChar = "\u{FFFD}"
     static let sseDoneMessage = "data: [DONE]\n\n"
     static let sseEventHeader = "data: "
     static let sseEventSeparator = "\n\n"
