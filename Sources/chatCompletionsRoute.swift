@@ -72,7 +72,7 @@ actor ChatCompletionManager {
     }
     
     func estimatePromptTokens(messages: [ChatMessageRequestData]) -> Int {
-        let combinedContent = messages.compactMap { $0.content }.joined(separator: "\n")
+        let combinedContent = messages.compactMap { $0.content.asString }.joined(separator: "\n")
         return tokenizer.encode(text: combinedContent).count
     }
     
@@ -117,7 +117,7 @@ func registerChatCompletionsRoute(
         let logger = req.logger
 
         let messages: [Message] = chatRequest.messages.map {
-            ["role": $0.role, "content": $0.content ?? ""]
+            ["role": $0.role, "content": $0.content.asString ?? ""]
         }
         let userInput = UserInput(messages: messages)
 

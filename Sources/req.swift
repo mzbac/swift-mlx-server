@@ -23,9 +23,69 @@ struct CompletionRequest: Content {
     }
 }
 
+struct ContentFragment: Content {
+    let type: String
+    let text: String?
+    let imageUrl: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case imageUrl = "image_url"
+    }
+}
+
 struct ChatMessageRequestData: Content {
     let role: String
-    let content: String?
+    let content: ContentFragmentType
+    
+    enum ContentFragmentType: Codable {
+        case text(String)
+        case fragments([ContentFragment])
+        case none
+        
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            
+            if let string = try? container.decode(String.self) {
+                self = .text(string)
+            } else if let fragments = try? container.decode([ContentFragment].self) {
+                self = .fragments(fragments)
+            } else if container.decodeNil() {
+                self = .none
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Expected String, [ContentFragment], or nil"
+                )
+            }
+        }
+        
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            
+            switch self {
+            case .text(let string):
+                try container.encode(string)
+            case .fragments(let fragments):
+                try container.encode(fragments)
+            case .none:
+                try container.encodeNil()
+            }
+        }
+        
+        var asString: String? {
+            switch self {
+            case .text(let string):
+                return string
+            case .fragments(let fragments):
+                let textFragments = fragments.compactMap { $0.type == "text" ? $0.text : nil }
+                return textFragments.isEmpty ? nil : textFragments.joined()
+            case .none:
+                return nil
+            }
+        }
+    }
 }
 
 struct ChatCompletionRequest: Content {
