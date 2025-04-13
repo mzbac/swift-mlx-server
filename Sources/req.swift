@@ -1,5 +1,6 @@
 import Vapor
 import Foundation
+import CoreImage
 
 struct CompletionRequest: Content {
     let model: String?
@@ -26,12 +27,14 @@ struct CompletionRequest: Content {
 struct ContentFragment: Content {
     let type: String
     let text: String?
-    let imageUrl: String?
+    let imageUrl: URL?
+    let videoUrl: URL?
     
     enum CodingKeys: String, CodingKey {
         case type
         case text
         case imageUrl = "image_url"
+        case videoUrl = "video_url"
     }
 }
 
@@ -98,9 +101,10 @@ struct ChatCompletionRequest: Content {
     let stop: [String]?
     let repetitionPenalty: Float?
     let repetitionContextSize: Int?
+    let resize: [CGFloat]?
 
     enum CodingKeys: String, CodingKey {
-        case messages, model, temperature, stream, stop
+        case messages, model, temperature, stream, stop, resize
         case maxTokens = "max_tokens"
         case topP = "top_p"
         case repetitionPenalty = "repetition_penalty"

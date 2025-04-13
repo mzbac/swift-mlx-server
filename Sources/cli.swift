@@ -4,6 +4,7 @@ import Logging
 import MLX
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
 import Hub
 import Tokenizers
 import Vapor
@@ -58,14 +59,20 @@ func encodeSSE<T: Encodable>(response: T, logger: Logger) -> String? {
     }
 }
 
-func routes(_ app: Application, _ modelPath: String) async throws {
+func routes(_ app: Application, _ modelPath: String, isVLM: Bool) async throws {
     let modelContainer: ModelContainer
     let loadedModelName: String
 
     do {
-        let modelFactory = LLMModelFactory.shared
-        let modelConfiguration: ModelConfiguration
+        let modelFactory: ModelFactory
         
+        if isVLM {
+            modelFactory = VLMModelFactory.shared
+        } else {
+            modelFactory = LLMModelFactory.shared
+        }
+        
+        let modelConfiguration: ModelConfiguration
         let expandedPath = NSString(string: modelPath).expandingTildeInPath
         
         let fileManager = FileManager.default
@@ -103,7 +110,8 @@ func routes(_ app: Application, _ modelPath: String) async throws {
         modelContainer: modelContainer,
         tokenizer: tokenizer,
         eosTokenId: eosTokenId,
-        loadedModelName: loadedModelName
+        loadedModelName: loadedModelName,
+        isVLM: isVLM
     )
 }
 
@@ -111,10 +119,15 @@ func routes(_ app: Application, _ modelPath: String) async throws {
 struct MLXServer: AsyncParsableCommand {
     @ArgumentParser.Option(name: .long, help: "Required: Path to MLX model dir/name.")
     var model: String
+    
     @ArgumentParser.Option(name: .long, help: "Host address.")
     var host: String = AppConstants.defaultHost
+    
     @ArgumentParser.Option(name: .long, help: "Port number.")
     var port: Int = AppConstants.defaultPort
+    
+    @ArgumentParser.Flag(name: .long, help: "Enable multi-modal processing for visual language models.")
+    var vlm: Bool = false
 
     @MainActor
     func run() async throws {
@@ -135,13 +148,14 @@ struct MLXServer: AsyncParsableCommand {
         let corsMiddleware = CORSMiddleware(configuration: corsConfiguration)
         app.middleware.use(corsMiddleware)
 
-        try await routes(app, model)
+        try await routes(app, model, isVLM: vlm)
 
         app.http.server.configuration.hostname = host
         app.http.server.configuration.port = port
         do {
             app.logger.info("Server starting on http://\(host):\(port)")
             app.logger.info("Using model identifier: \(model)")
+            app.logger.info("VLM mode: \(vlm ? "enabled" : "disabled")")
             try await app.execute()
         } catch { app.logger.critical("Server error: \(error)"); throw error }
     }

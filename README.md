@@ -1,15 +1,15 @@
 # swift-mlx-server
 
-A Swift-based server application designed to provide an OpenAI-compatible text completion API.
+A Swift-based server application designed to provide an OpenAI-compatible text completion API with support for both text-only and visual language models (VLM).
 
 ## Usage
 
 To run the server:
 
 ```
-swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080
+swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080 [--vlm]
 ```
-Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup.
+Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup. Use the `--vlm` flag when running with visual language models that support multi-modal inputs.
 
 # API Endpoints
 
@@ -60,6 +60,8 @@ The server provides two main endpoints:
 
 ### Request Body
 
+For text-only models:
+
 ```json
 {
   "model": "model-name",
@@ -74,6 +76,31 @@ The server provides two main endpoints:
   "stop": ["###", "END"],
   "repetition_penalty": 1.1,
   "repetition_context_size": 20
+}
+```
+
+For visual language models (requires `--vlm` flag):
+
+```json
+{
+  "model": "model-name",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": [
+      {"type": "text", "text": "What do you see in this image?"},
+      {"type": "image", "image_url": "https://example.com/image.jpg"},
+      {"type": "video", "video_url": "https://example.com/video.mp4"},
+      {"type": "text", "text": "Please describe it in detail."}
+    ]}
+  ],
+  "max_tokens": 100,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "stream": false,
+  "stop": ["###", "END"],
+  "repetition_penalty": 1.1,
+  "repetition_context_size": 20,
+  "resize": [512, 512]
 }
 ```
 
@@ -121,3 +148,25 @@ Both endpoints accept the following parameters:
 - `repetition_penalty` (Optional): Applies a penalty to repeated tokens to reduce repetition. Defaults to 1.0.
 
 - `repetition_context_size` (Optional): The size of the context window for applying repetition penalty. Defaults to 20.
+
+### VLM-Specific Parameters
+
+When running in VLM mode with the `--vlm` flag:
+
+- `resize` (Optional): An array of one or two integers specifying the dimensions to resize images to. If one value is provided, it's used for both width and height. If two values are provided, they represent [width, height].
+
+## Multi-Modal Content Format
+
+When using VLM mode, message content can be structured in different ways:
+
+- Simple text string: `"content": "Your text here"`
+- Array of content fragments:
+  ```json
+  "content": [
+    {"type": "text", "text": "Text content here"},
+    {"type": "image", "image_url": "https://example.com/image.jpg"},
+    {"type": "video", "video_url": "https://example.com/video.mp4"}
+  ]
+  ```
+
+The server will process these fragments appropriately for supported visual language models.

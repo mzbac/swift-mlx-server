@@ -56,12 +56,12 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "--model mlx-community/Qwen2.5-7B-Instruct-1M-8bit"
-            isEnabled = "YES">
+            argument = "--vlm --model mlx-community/Qwen2-VL-2B-Instruct-4bit"
+            isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
-            argument = "--model mlx-community/c4ai-command-r-v01-4bit"
-            isEnabled = "NO">
+            argument = "--vlm --model HuggingFaceTB/SmolVLM2-500M-Video-Instruct-mlx"
+            isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>

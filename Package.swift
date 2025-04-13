@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 5.10.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -19,6 +19,8 @@ let package = Package(
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
         .product(name: "Vapor", package: "vapor"),
         .product(name: "MLXLLM", package: "mlx-swift-examples"),
+        .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
+        .product(name: "MLXVLM", package: "mlx-swift-examples"),
       ]
     )
   ]

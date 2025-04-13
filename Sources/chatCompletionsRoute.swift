@@ -6,18 +6,21 @@ import MLXLLM
 import MLXLMCommon
 import Hub
 import Tokenizers
+import CoreImage
 
 actor ChatCompletionManager {
     private let modelContainer: ModelContainer
     private let tokenizer: Tokenizer
     private let eosTokenId: Int
     private let loadedModelName: String
+    private let isVLM: Bool
     
-    init(modelContainer: ModelContainer, tokenizer: Tokenizer, eosTokenId: Int, loadedModelName: String) {
+    init(modelContainer: ModelContainer, tokenizer: Tokenizer, eosTokenId: Int, loadedModelName: String, isVLM: Bool) {
         self.modelContainer = modelContainer
         self.tokenizer = tokenizer
         self.eosTokenId = eosTokenId
         self.loadedModelName = loadedModelName
+        self.isVLM = isVLM
     }
     
     func generateChatTokenStream(
@@ -96,6 +99,89 @@ actor ChatCompletionManager {
     func decodeTokens(_ tokens: [Int]) -> String {
         tokenizer.decode(tokens: tokens)
     }
+    
+    func processUserMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
+        if isVLM {
+            return processVLMMessages(chatRequest)
+        } else {
+            return processTextOnlyMessages(chatRequest)
+        }
+    }
+    
+    private func processTextOnlyMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
+        let messages: [[String: Any]] = chatRequest.messages.map {
+            ["role": $0.role, "content": $0.content.asString ?? ""]
+        }
+        return UserInput(messages: messages)
+    }
+    
+    private func processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
+        var allImages: [UserInput.Image] = []
+        var allVideos: [UserInput.Video] = []
+        
+        let processedMessages: [[String: Any]] = chatRequest.messages.map { message -> [String: Any] in
+            switch message.content {
+            case .text(let textContent):
+                return ["role": message.role, "content": textContent]
+                
+            case .fragments(let fragments):
+                let imageFragments = fragments.filter { $0.type == "image" }
+                let videoFragments = fragments.filter { $0.type == "video" }
+                
+                let images = imageFragments.compactMap { fragment in 
+                    fragment.imageUrl.map { UserInput.Image.url($0) }
+                }
+                allImages.append(contentsOf: images)
+                
+                let videos = videoFragments.compactMap { fragment in 
+                    fragment.videoUrl.map { UserInput.Video.url($0) }
+                }
+                allVideos.append(contentsOf: videos)
+                
+                if !images.isEmpty || !videos.isEmpty {
+                    var contentFragments: [[String: Any]] = []
+                    
+                    fragments.forEach { fragment in
+                        if fragment.type == "text", let text = fragment.text {
+                            contentFragments.append(["type": "text", "text": text])
+                        }
+                    }
+                    
+                    contentFragments.append(contentsOf: imageFragments.map { _ in ["type": "image"] })
+                    contentFragments.append(contentsOf: videoFragments.map { _ in ["type": "video"] })
+                    
+                    return ["role": message.role, "content": contentFragments]
+                } else {
+                    return ["role": message.role, "content": message.content.asString ?? ""]
+                }
+                
+            case .none:
+                return ["role": message.role, "content": ""]
+            }
+        }
+        
+        var userInput = UserInput(messages: processedMessages, images: allImages, videos: allVideos)
+        
+        if let resize = chatRequest.resize, !resize.isEmpty {
+            let size: CGSize
+            if resize.count == 1 {
+                let v = resize[0]
+                size = CGSize(width: v, height: v)
+            } else if resize.count >= 2 {
+                let v0 = resize[0]
+                let v1 = resize[1]
+                size = CGSize(width: v0, height: v1)
+            } else {
+                size = .zero
+            }
+            
+            if size != .zero {
+                userInput.processing.resize = size
+            }
+        }
+        
+        return userInput
+    }
 }
 
 func registerChatCompletionsRoute(
@@ -103,24 +189,22 @@ func registerChatCompletionsRoute(
     modelContainer: ModelContainer,
     tokenizer: Tokenizer,
     eosTokenId: Int,
-    loadedModelName: String
+    loadedModelName: String,
+    isVLM: Bool = false
 ) throws {
     let chatManager = ChatCompletionManager(
         modelContainer: modelContainer,
         tokenizer: tokenizer,
         eosTokenId: eosTokenId,
-        loadedModelName: loadedModelName
+        loadedModelName: loadedModelName,
+        isVLM: isVLM
     )
 
     app.post("v1", "chat", "completions") { req async throws -> Response in
         let chatRequest = try req.content.decode(ChatCompletionRequest.self)
         let logger = req.logger
 
-        let messages: [Message] = chatRequest.messages.map {
-            ["role": $0.role, "content": $0.content.asString ?? ""]
-        }
-        let userInput = UserInput(messages: messages)
-
+        let userInput = await chatManager.processUserMessages(chatRequest)
         let estimatedPromptTokens = await chatManager.estimatePromptTokens(messages: chatRequest.messages)
         let reqModelName = await chatManager.getModelName(requestedModel: chatRequest.model)
 
