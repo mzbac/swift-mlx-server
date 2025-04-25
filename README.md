@@ -9,7 +9,7 @@ To run the server:
 ```
 swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080 [--vlm]
 ```
-Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup. Use the `--vlm` flag when running with visual language models that support multi-modal inputs.
+Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup. Use the `--vlm` flag when running with vision language models that support multi-modal inputs.
 
 # API Endpoints
 
