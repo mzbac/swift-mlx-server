@@ -8,6 +8,7 @@ import MLXVLM
 import Hub
 import Tokenizers
 import Vapor
+import mlx_embeddings
 
 enum AppConstants {
     static let defaultHost = "127.0.0.1"
@@ -59,8 +60,8 @@ func encodeSSE<T: Encodable>(response: T, logger: Logger) -> String? {
     }
 }
 
-func routes(_ app: Application, _ modelPath: String, isVLM: Bool) async throws {
-    let modelContainer: ModelContainer
+func routes(_ app: Application, _ modelPath: String, isVLM: Bool, embeddingModel: String?) async throws {
+    let modelContainer: MLXLMCommon.ModelContainer
     let loadedModelName: String
 
     do {
@@ -72,7 +73,7 @@ func routes(_ app: Application, _ modelPath: String, isVLM: Bool) async throws {
             modelFactory = LLMModelFactory.shared
         }
         
-        let modelConfiguration: ModelConfiguration
+        let modelConfiguration: MLXLMCommon.ModelConfiguration
         let expandedPath = NSString(string: modelPath).expandingTildeInPath
         
         let fileManager = FileManager.default
@@ -94,7 +95,7 @@ func routes(_ app: Application, _ modelPath: String, isVLM: Bool) async throws {
         throw Abort(.internalServerError, reason: "Failed to load MLX model: \(error.localizedDescription)")
     }
 
-    let tokenizer = try await modelContainer.perform { $0.tokenizer }
+    let tokenizer = await modelContainer.perform { $0.tokenizer }
     guard let eosTokenId = tokenizer.eosTokenId else { throw Abort(.internalServerError, reason: "Tokenizer EOS token ID missing.") }
 
     try registerTextCompletionsRoute(
@@ -113,6 +114,11 @@ func routes(_ app: Application, _ modelPath: String, isVLM: Bool) async throws {
         loadedModelName: loadedModelName,
         isVLM: isVLM
     )
+
+    let embeddingModelContainer = try await mlx_embeddings.loadModelContainer(
+        configuration: ModelConfiguration(id: embeddingModel!)
+    )
+    registerEmbeddingsRoute(app, modelContainer: embeddingModelContainer)
 }
 
 @main
@@ -128,6 +134,9 @@ struct MLXServer: AsyncParsableCommand {
     
     @ArgumentParser.Flag(name: .long, help: "Enable multi-modal processing for visual language models.")
     var vlm: Bool = false
+
+    @ArgumentParser.Option(name: .long, help: "Path or identifier for embedding model.")
+    var embeddingModel: String?
 
     @MainActor
     func run() async throws {
@@ -148,7 +157,7 @@ struct MLXServer: AsyncParsableCommand {
         let corsMiddleware = CORSMiddleware(configuration: corsConfiguration)
         app.middleware.use(corsMiddleware)
 
-        try await routes(app, model, isVLM: vlm)
+        try await routes(app, model, isVLM: vlm, embeddingModel: embeddingModel)
 
         app.http.server.configuration.hostname = host
         app.http.server.configuration.port = port

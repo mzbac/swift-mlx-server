@@ -221,7 +221,7 @@ func registerChatCompletionsRoute(
 
         try await chatManager.validateProcessor()
 
-        var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+        let detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
         
         if streamResponse {
             return try await handleStreamingResponse(

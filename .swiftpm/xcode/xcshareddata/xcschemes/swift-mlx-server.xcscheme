@@ -56,12 +56,16 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "--vlm --model mlx-community/Qwen2-VL-2B-Instruct-4bit"
+            argument = "--vlm --model mlx-community/Qwen2-VL-2B-Instruct-4bit   --embedding-model TaylorAI/bge-micro"
+            isEnabled = "YES">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "-h"
             isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
             argument = "--vlm --model HuggingFaceTB/SmolVLM2-500M-Video-Instruct-mlx"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
