@@ -49,7 +49,7 @@ enum EmbeddingInput: Codable {
 }
 
 struct EmbeddingData: Content {
-    var object: String = "embedding"
+  var object: String = "embedding"
   let embedding: EmbeddingOutput
   let index: Int
 }
@@ -89,17 +89,17 @@ struct UsageData: Content {
 }
 
 struct EmbeddingResponse: Content {
-    var object: String = "list"
+  var object: String = "list"
   let data: [EmbeddingData]
   let model: String
   let usage: UsageData
 }
 
 actor EmbeddingsManager {
-  private let modelContainer: mlx_embeddings.ModelContainer
+  private let modelContainer: mlx_embeddings.ModelContainer?
   private let modelId: String
 
-  init(modelContainer: mlx_embeddings.ModelContainer, modelId: String = "default_model") {
+  init(modelContainer: mlx_embeddings.ModelContainer?, modelId: String = "default_model") {
     self.modelId = modelId
     self.modelContainer = modelContainer
   }
@@ -118,7 +118,7 @@ actor EmbeddingsManager {
       )
     }
     let batchSize = request.batch_size ?? texts.count
-    return await modelContainer.perform { model, tokenizer in
+    return await modelContainer!.perform { model, tokenizer in
       var allData: [EmbeddingData] = []
       var promptTokens = 0
       var index = 0
@@ -160,9 +160,15 @@ actor EmbeddingsManager {
   }
 }
 
-func registerEmbeddingsRoute(_ app: Application, modelContainer: mlx_embeddings.ModelContainer) {
+func registerEmbeddingsRoute(_ app: Application, modelContainer: mlx_embeddings.ModelContainer?) {
+
   let manager = EmbeddingsManager(modelContainer: modelContainer)
   app.post("v1", "embeddings") { req async throws -> EmbeddingResponse in
+    guard let modelContainer else {
+      throw Abort(
+        .serviceUnavailable,
+        reason: "Embedding model not loaded. Start server with --embedding-model option.")
+    }
     let embeddingRequest = try req.content.decode(EmbeddingRequest.self)
     return try await manager.embed(request: embeddingRequest)
   }

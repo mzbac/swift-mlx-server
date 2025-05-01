@@ -60,10 +60,6 @@
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
-            argument = "-h"
-            isEnabled = "NO">
-         </CommandLineArgument>
-         <CommandLineArgument
             argument = "--vlm --model HuggingFaceTB/SmolVLM2-500M-Video-Instruct-mlx"
             isEnabled = "NO">
          </CommandLineArgument>

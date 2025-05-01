@@ -115,9 +115,17 @@ func routes(_ app: Application, _ modelPath: String, isVLM: Bool, embeddingModel
         isVLM: isVLM
     )
 
-    let embeddingModelContainer = try await mlx_embeddings.loadModelContainer(
-        configuration: ModelConfiguration(id: embeddingModel!)
-    )
+    var embeddingModelContainer: mlx_embeddings.ModelContainer? = nil
+    if let embeddingModel {
+        do {
+            embeddingModelContainer = try await mlx_embeddings.loadModelContainer(
+                configuration: ModelConfiguration(id: embeddingModel)
+            )
+            app.logger.info("Embedding model loaded successfully")
+        } catch {
+            app.logger.warning("Failed to load embedding model: \(error)")
+        }
+    }
     registerEmbeddingsRoute(app, modelContainer: embeddingModelContainer)
 }
 
