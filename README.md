@@ -1,19 +1,19 @@
 # swift-mlx-server
 
-A Swift-based server application designed to provide an OpenAI-compatible text completion API with support for both text-only and visual language models (VLM).
+A Swift-based server application designed to provide an OpenAI-compatible text completion API with support for both text-only and vision language models (VLM). It also supports generating text embeddings.
 
 ## Usage
 
 To run the server:
 
 ```
-swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080 [--vlm]
+swift-mlx-server --model hf/model/id --host 127.0.0.1 --port 8080 [--vlm] [--embedding-model hf/embedding/model/id]
 ```
-Replace `hf/model/id` with the Hugging Face model ID. Adjust the host and port as necessary to fit your setup. Use the `--vlm` flag when running with vision language models that support multi-modal inputs.
+Replace `hf/model/id` with the Hugging Face model ID for text generation. Adjust the host and port as necessary to fit your setup. Use the `--vlm` flag when running with vision language models that support multi-modal inputs. Use `--embedding-model` to specify a model for the embeddings endpoint.
 
 # API Endpoints
 
-The server provides two main endpoints:
+The server provides three main endpoints:
 
 ## Text Completions
 
@@ -129,33 +129,98 @@ For visual language models (requires `--vlm` flag):
 }
 ```
 
+## Embeddings
+
+- `POST /v1/embeddings`: Generates embedding vectors for the given input text(s). Requires the server to be started with the `--embedding-model` option.
+
+### Request Body
+
+```json
+{
+  "input": "Your text string goes here",
+  "model": "embedding-model-name",
+  "encoding_format": "float",
+  "dimensions": 1024,
+  "user": "user-id-123",
+  "batch_size": 32
+}
+```
+
+Alternatively, `input` can be an array of strings:
+
+```json
+{
+  "input": ["First text string", "Second text string"],
+  "model": "embedding-model-name"
+}
+```
+
+### Response
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.0023, -0.0034, /* ... */, 0.0123],
+      "index": 0
+    },
+    {
+      "object": "embedding",
+      "embedding": "UklGR...",
+      "index": 1
+    }
+  ],
+  "model": "embedding-model-name",
+  "usage": {
+    "prompt_tokens": 15,
+    "total_tokens": 15
+  }
+}
+```
+
 ## Request Parameters
 
-Both endpoints accept the following parameters:
+The endpoints accept the following parameters:
 
-- `model` (Optional): The model to use for generation. If not provided, the server uses the model specified at startup.
+### Common Parameters (Completions & Chat)
 
-- `stop` (Optional): An array of strings or a single string. These are sequences of tokens on which the generation should stop.
+- `model` (Optional): The model to use for generation. If not provided, the server uses the model specified at startup. For embeddings, this refers to the embedding model.
 
-- `max_tokens` (Optional): An integer specifying the maximum number of tokens to generate. Defaults to 100.
+- `stop` (Optional, Completions & Chat): An array of strings or a single string. These are sequences of tokens on which the generation should stop.
 
-- `stream` (Optional): A boolean indicating if the response should be streamed. If true, responses are sent as they are generated. Defaults to false.
+- `max_tokens` (Optional, Completions & Chat): An integer specifying the maximum number of tokens to generate. Defaults to 100.
 
-- `temperature` (Optional): A float specifying the sampling temperature. Higher values like 0.8 make output more random, lower values like 0.2 make it more deterministic. Defaults to 0.7.
+- `stream` (Optional, Completions & Chat): A boolean indicating if the response should be streamed. If true, responses are sent as they are generated. Defaults to false.
 
-- `top_p` (Optional): A float specifying the nucleus sampling parameter. Defaults to 0.9.
+- `temperature` (Optional, Completions & Chat): A float specifying the sampling temperature. Higher values like 0.8 make output more random, lower values like 0.2 make it more deterministic. Defaults to 0.7.
 
-- `repetition_penalty` (Optional): Applies a penalty to repeated tokens to reduce repetition. Defaults to 1.0.
+- `top_p` (Optional, Completions & Chat): A float specifying the nucleus sampling parameter. Defaults to 0.9.
 
-- `repetition_context_size` (Optional): The size of the context window for applying repetition penalty. Defaults to 20.
+- `repetition_penalty` (Optional, Completions & Chat): Applies a penalty to repeated tokens to reduce repetition. Defaults to 1.0.
 
-### VLM-Specific Parameters
+- `repetition_context_size` (Optional, Completions & Chat): The size of the context window for applying repetition penalty. Defaults to 20.
+
+### Embeddings Parameters
+
+- `input` (Required, Embeddings): The input text or array of texts to embed.
+
+- `encoding_format` (Optional, Embeddings): The format to return the embeddings in. Can be `float` (default) or `base64`.
+
+- `dimensions` (Optional, Embeddings): The desired number of dimensions for the output embeddings. (Note: Currently not implemented, model's default dimension is used).
+
+- `user` (Optional, Embeddings): A unique identifier representing your end-user, which can help OpenAI monitor and detect abuse.
+
+- `batch_size` (Optional, Embeddings): The number of input texts to process in a single batch. Defaults to processing all inputs in one batch.
+
+### VLM-Specific Parameters (Chat)
 
 When running in VLM mode with the `--vlm` flag:
 
 - `resize` (Optional): An array of one or two integers specifying the dimensions to resize images to. If one value is provided, it's used for both width and height. If two values are provided, they represent [width, height].
 
-## Multi-Modal Content Format
+## Multi-Modal Content Format (Chat)
 
 When using VLM mode, message content can be structured in different ways:
 
