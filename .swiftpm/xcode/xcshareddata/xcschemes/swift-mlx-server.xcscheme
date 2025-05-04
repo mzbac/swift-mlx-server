@@ -56,7 +56,7 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "--vlm --model mlx-community/Qwen2-VL-2B-Instruct-4bit   --embedding-model TaylorAI/bge-micro"
+            argument = "--model Qwen/Qwen3-0.6B --embedding-model TaylorAI/bge-micro"
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
@@ -64,6 +64,13 @@
             isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "MLX_ENV"
+            value = "development"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

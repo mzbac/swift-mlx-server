@@ -1,181 +1,135 @@
 import ArgumentParser
 import Foundation
+import Hub
 import Logging
 import MLX
 import MLXLLM
 import MLXLMCommon
 import MLXVLM
-import Hub
 import Tokenizers
 import Vapor
 import mlx_embeddings
 
-enum AppConstants {
-    static let defaultHost = "127.0.0.1"
-    static let defaultPort = 8080
-    static let sseDoneMessage = "data: [DONE]\n\n"
-    static let sseEventHeader = "data: "
-    static let sseEventSeparator = "\n\n"
+struct ModelInfo: Content {
+  let id: String
+  var object: String = "model"
+  let created: Int = Int(Date().timeIntervalSince1970)
+  let ownedBy: String = "user"
+
+  enum CodingKeys: String, CodingKey {
+    case id, object, created
+    case ownedBy = "owned_by"
+  }
 }
 
-enum GenerationDefaults {
-    static let maxTokens = 128
-    static let temperature: Float = 0.8
-    static let topP: Float = 1.0
-    static let stream = false
-    static let repetitionPenalty: Float = 1.0
-    static let repetitionContextSize = 20
-    static let stopSequences: [String] = []
+struct ModelListResponse: Content {
+  var object: String = "list"
+  let data: [ModelInfo]
 }
 
-struct StopCondition {
-    let stopMet: Bool
-    let trimLength: Int
-}
+func routes(_ app: Application, modelProvider: ModelProvider, embeddingModel: String?, isVLM: Bool)
+  async throws
+{
 
-func checkStoppingCriteria(tokens: [Int], stopIdSequences: [[Int]], eosTokenId: Int) -> StopCondition {
-    guard let lastToken = tokens.last else { return StopCondition(stopMet: false, trimLength: 0) }
-    if lastToken == eosTokenId { return StopCondition(stopMet: true, trimLength: 1) }
-    for stopIds in stopIdSequences {
-        guard !stopIds.isEmpty else { continue }
-        if tokens.count >= stopIds.count, tokens.suffix(stopIds.count) == stopIds { return StopCondition(stopMet: true, trimLength: stopIds.count) }
-    }
-    return StopCondition(stopMet: false, trimLength: 0)
-}
+  try registerTextCompletionsRoute(
+    app,
+    modelProvider: modelProvider
+  )
 
-func encodeSSE<T: Encodable>(response: T, logger: Logger) -> String? {
+  try registerChatCompletionsRoute(
+    app,
+    modelProvider: modelProvider,
+    isVLM: isVLM
+  )
+
+  var embeddingModelContainer: mlx_embeddings.ModelContainer? = nil
+  if let embeddingModel {
     do {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        let jsonData = try encoder.encode(response)
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            logger.error("Failed encodeSSE utf8")
-            return nil
-        }
-        return AppConstants.sseEventHeader + jsonString + AppConstants.sseEventSeparator
+      embeddingModelContainer = try await mlx_embeddings.loadModelContainer(
+        configuration: ModelConfiguration(id: embeddingModel)
+      )
+      app.logger.info("Embedding model loaded successfully")
     } catch {
-        logger.error("Failed encodeSSE: \(error)")
-        return nil
+      app.logger.warning("Failed to load embedding model: \(error)")
     }
-}
+  }
+  registerEmbeddingsRoute(app, modelContainer: embeddingModelContainer)
 
-func routes(_ app: Application, _ modelPath: String, isVLM: Bool, embeddingModel: String?) async throws {
-    let modelContainer: MLXLMCommon.ModelContainer
-    let loadedModelName: String
+  app.get("v1", "models") { req async throws -> ModelListResponse in
+    req.logger.info("Handling /v1/models request")
 
-    do {
-        let modelFactory: ModelFactory
-        
-        if isVLM {
-            modelFactory = VLMModelFactory.shared
-        } else {
-            modelFactory = LLMModelFactory.shared
-        }
-        
-        let modelConfiguration: MLXLMCommon.ModelConfiguration
-        let expandedPath = NSString(string: modelPath).expandingTildeInPath
-        
-        let fileManager = FileManager.default
-        var isDirectory: ObjCBool = false
-        let modelPathExists = fileManager.fileExists(atPath: expandedPath, isDirectory: &isDirectory)
-        
-        if modelPathExists && isDirectory.boolValue {
-            modelConfiguration = ModelConfiguration(directory: URL(filePath: expandedPath))
-            loadedModelName = modelConfiguration.name
-        } else {
-            modelConfiguration = modelFactory.configuration(id: expandedPath)
-            loadedModelName = modelConfiguration.name
-        }
-        
-        modelContainer = try await modelFactory.loadContainer(configuration: modelConfiguration)
-        app.logger.info("MLX Model loaded successfully. Identifier: \(loadedModelName)")
-    } catch {
-        app.logger.critical("Failed to load MLX model from \(modelPath): \(error)")
-        throw Abort(.internalServerError, reason: "Failed to load MLX model: \(error.localizedDescription)")
-    }
+    let modelIds = await modelProvider.getAvailableModelIDs()
 
-    let tokenizer = await modelContainer.perform { $0.tokenizer }
-    guard let eosTokenId = tokenizer.eosTokenId else { throw Abort(.internalServerError, reason: "Tokenizer EOS token ID missing.") }
+    let modelInfos = modelIds.map { ModelInfo(id: $0) }  
 
-    try registerTextCompletionsRoute(
-        app,
-        modelContainer: modelContainer,
-        tokenizer: tokenizer,
-        eosTokenId: eosTokenId,
-        loadedModelName: loadedModelName
-    )
-
-    try registerChatCompletionsRoute(
-        app,
-        modelContainer: modelContainer,
-        tokenizer: tokenizer,
-        eosTokenId: eosTokenId,
-        loadedModelName: loadedModelName,
-        isVLM: isVLM
-    )
-
-    var embeddingModelContainer: mlx_embeddings.ModelContainer? = nil
-    if let embeddingModel {
-        do {
-            embeddingModelContainer = try await mlx_embeddings.loadModelContainer(
-                configuration: ModelConfiguration(id: embeddingModel)
-            )
-            app.logger.info("Embedding model loaded successfully")
-        } catch {
-            app.logger.warning("Failed to load embedding model: \(error)")
-        }
-    }
-    registerEmbeddingsRoute(app, modelContainer: embeddingModelContainer)
+    return ModelListResponse(data: modelInfos)
+  }
 }
 
 @main
 struct MLXServer: AsyncParsableCommand {
-    @ArgumentParser.Option(name: .long, help: "Required: Path to MLX model dir/name.")
-    var model: String
-    
-    @ArgumentParser.Option(name: .long, help: "Host address.")
-    var host: String = AppConstants.defaultHost
-    
-    @ArgumentParser.Option(name: .long, help: "Port number.")
-    var port: Int = AppConstants.defaultPort
-    
-    @ArgumentParser.Flag(name: .long, help: "Enable multi-modal processing for visual language models.")
-    var vlm: Bool = false
+  @ArgumentParser.Option(name: .long, help: "Required: Path to MLX model dir/name.")
+  var model: String
 
-    @ArgumentParser.Option(name: .long, help: "Path or identifier for embedding model.")
-    var embeddingModel: String?
+  @ArgumentParser.Option(name: .long, help: "Host address.")
+  var host: String = AppConstants.defaultHost
 
-    @MainActor
-    func run() async throws {
-        let envName = ProcessInfo.processInfo.environment["MLX_ENV"] ?? "production"
-        var env = Environment(name: envName, arguments: ["vapor"])
-        try LoggingSystem.bootstrap(from: &env)
-        let app = Application(env)
-        defer { app.logger.info("Server shutting down."); app.shutdown() }
+  @ArgumentParser.Option(name: .long, help: "Port number.")
+  var port: Int = AppConstants.defaultPort
 
-        let corsConfiguration = CORSMiddleware.Configuration(
-            allowedOrigin: .all,
-            allowedMethods: [.GET, .POST, .OPTIONS],
-            allowedHeaders: [
-                .accept, .authorization, .contentType, .origin, 
-                .xRequestedWith, .userAgent, .accessControlAllowOrigin
-            ]
-        )
-        let corsMiddleware = CORSMiddleware(configuration: corsConfiguration)
-        app.middleware.use(corsMiddleware)
+  @ArgumentParser.Flag(
+    name: .long, help: "Enable multi-modal processing for visual language models.")
+  var vlm: Bool = false
 
-        try await routes(app, model, isVLM: vlm, embeddingModel: embeddingModel)
+  @ArgumentParser.Option(name: .long, help: "Path or identifier for embedding model.")
+  var embeddingModel: String?
 
-        app.http.server.configuration.hostname = host
-        app.http.server.configuration.port = port
-        do {
-            app.logger.info("Server starting on http://\(host):\(port)")
-            app.logger.info("Using model identifier: \(model)")
-            app.logger.info("VLM mode: \(vlm ? "enabled" : "disabled")")
-            try await app.execute()
-        } catch { app.logger.critical("Server error: \(error)"); throw error }
+  @MainActor
+  func run() async throws {
+    let envName = ProcessInfo.processInfo.environment["MLX_ENV"] ?? "production"
+    var env = Environment(name: envName, arguments: ["vapor"])
+    try LoggingSystem.bootstrap(from: &env)
+    let app = Application(env)
+    defer {
+      app.logger.info("Server shutting down.")
+      app.shutdown()
     }
+
+    let modelProvider = ModelProvider(defaultModelPath: model, isVLM: vlm, logger: app.logger)
+    app.logger.info("Attempting to pre-load default model: \(model)")
+    do {
+      _ = try await modelProvider.getModel(requestedModelId: nil)
+      app.logger.info("Default model pre-loaded successfully.")
+    } catch {
+      app.logger.error(
+        "Failed to pre-load default model \(model): \(error). Server will attempt to load on first request."
+      )
+    }
+    let corsConfiguration = CORSMiddleware.Configuration(
+      allowedOrigin: .all,
+      allowedMethods: [.GET, .POST, .OPTIONS],
+      allowedHeaders: [
+        .accept, .authorization, .contentType, .origin,
+        .xRequestedWith, .userAgent, .accessControlAllowOrigin,
+      ]
+    )
+    let corsMiddleware = CORSMiddleware(configuration: corsConfiguration)
+    app.middleware.use(corsMiddleware)
+
+      try await routes(app, modelProvider: modelProvider, embeddingModel: embeddingModel, isVLM: vlm)
+
+    app.http.server.configuration.hostname = host
+    app.http.server.configuration.port = port
+    do {
+      app.logger.info("Server starting on http://\(host):\(port)")
+      app.logger.info("Using model identifier: \(model)")
+      app.logger.info("VLM mode: \(vlm ? "enabled" : "disabled")")
+      try await app.execute()
+    } catch {
+      app.logger.critical("Server error: \(error)")
+      throw error
+    }
+  }
 }
 
 extension Array { func nilIfEmpty() -> Self? { self.isEmpty ? nil : self } }

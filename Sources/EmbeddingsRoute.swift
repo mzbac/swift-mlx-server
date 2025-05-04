@@ -110,12 +110,14 @@ actor EmbeddingsManager {
       throw Abort(.badRequest)
     }
     let encodingFormat = request.encoding_format ?? "float"
-    guard request.model == "default_model" || request.model == modelId else {
-      throw Abort(
-        .badRequest,
-        reason:
-          "Model '\(request.model!)' is not available or does not match expected model '\(modelId)'"
-      )
+    if let requestedModel = request.model {
+      guard requestedModel == "default_model" || requestedModel == modelId else {
+        throw Abort(
+          .badRequest,
+          reason:
+            "Model '\(requestedModel)' is not available or does not match expected model '\(modelId)'"
+        )
+      }
     }
     let batchSize = request.batch_size ?? texts.count
     return await modelContainer!.perform { model, tokenizer in

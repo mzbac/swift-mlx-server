@@ -220,6 +220,32 @@ When running in VLM mode with the `--vlm` flag:
 
 - `resize` (Optional): An array of one or two integers specifying the dimensions to resize images to. If one value is provided, it's used for both width and height. If two values are provided, they represent [width, height].
 
+## Models Endpoint
+
+- `GET /v1/models`: Returns a list of available models on the server.
+
+### Response
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "model-id",
+      "object": "model",
+      "created": 1686935002,
+      "owned_by": "organization-owner"
+    },
+    {
+      "id": "embedding-model-id",
+      "object": "model",
+      "created": 1686935002,
+      "owned_by": "organization-owner"
+    }
+  ]
+}
+```
+
 ## Multi-Modal Content Format (Chat)
 
 When using VLM mode, message content can be structured in different ways:
