@@ -27,7 +27,10 @@ struct ModelListResponse: Content {
   let data: [ModelInfo]
 }
 
-func routes(_ app: Application, modelProvider: ModelProvider, embeddingModel: String?, isVLM: Bool)
+func routes(
+  _ app: Application, modelProvider: ModelProvider, embeddingModelProvider: EmbeddingModelProvider,
+  isVLM: Bool
+)
   async throws
 {
 
@@ -42,25 +45,14 @@ func routes(_ app: Application, modelProvider: ModelProvider, embeddingModel: St
     isVLM: isVLM
   )
 
-  var embeddingModelContainer: mlx_embeddings.ModelContainer? = nil
-  if let embeddingModel {
-    do {
-      embeddingModelContainer = try await mlx_embeddings.loadModelContainer(
-        configuration: ModelConfiguration(id: embeddingModel)
-      )
-      app.logger.info("Embedding model loaded successfully")
-    } catch {
-      app.logger.warning("Failed to load embedding model: \(error)")
-    }
-  }
-  registerEmbeddingsRoute(app, modelContainer: embeddingModelContainer)
+  registerEmbeddingsRoute(app, embeddingModelProvider: embeddingModelProvider)
 
   app.get("v1", "models") { req async throws -> ModelListResponse in
     req.logger.info("Handling /v1/models request")
 
     let modelIds = await modelProvider.getAvailableModelIDs()
 
-    let modelInfos = modelIds.map { ModelInfo(id: $0) }  
+    let modelInfos = modelIds.map { ModelInfo(id: $0) }
 
     return ModelListResponse(data: modelInfos)
   }
@@ -96,6 +88,11 @@ struct MLXServer: AsyncParsableCommand {
     }
 
     let modelProvider = ModelProvider(defaultModelPath: model, isVLM: vlm, logger: app.logger)
+    let embeddingModelProvider = EmbeddingModelProvider(
+      defaultModelId: embeddingModel,
+      logger: app.logger
+    )
+
     app.logger.info("Attempting to pre-load default model: \(model)")
     do {
       _ = try await modelProvider.getModel(requestedModelId: nil)
@@ -116,7 +113,7 @@ struct MLXServer: AsyncParsableCommand {
     let corsMiddleware = CORSMiddleware(configuration: corsConfiguration)
     app.middleware.use(corsMiddleware)
 
-      try await routes(app, modelProvider: modelProvider, embeddingModel: embeddingModel, isVLM: vlm)
+      try await routes(app, modelProvider: modelProvider, embeddingModelProvider: embeddingModelProvider, isVLM: vlm)
 
     app.http.server.configuration.hostname = host
     app.http.server.configuration.port = port
