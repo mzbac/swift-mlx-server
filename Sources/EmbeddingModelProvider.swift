@@ -7,8 +7,9 @@ import Vapor
 import mlx_embeddings
 
 actor EmbeddingModelProvider {
-  private var currentModel:
-    (container: mlx_embeddings.ModelContainer, loadedName: String, modelId: String)?
+  private var currentModelContainer: mlx_embeddings.ModelContainer?
+  private var currentModelIdString: String?
+  private var currentLoadedModelName: String?
   private let logger: Logger
   private let defaultModelId: String?
   private let fileManager = FileManager.default
@@ -23,29 +24,61 @@ actor EmbeddingModelProvider {
   func getModel(requestedModelId: String?) async throws -> (
     container: mlx_embeddings.ModelContainer, loadedName: String
   ) {
-    guard let targetModelId = requestedModelId ?? defaultModelId else {
-      logger.error("No embedding model requested and no default embedding model configured.")
-      throw Abort(
-        .badRequest,
-        reason:
-          "No embedding model specified and no default is configured. Use the 'model' field in your request or start the server with a default --embedding-model."
-      )
+    let actualIdToLoad: String
+    let originalRequestDescription: String
+
+    if let userRequestedId = requestedModelId {
+      if userRequestedId == "default_model" {
+        guard let configuredDefault = self.defaultModelId else {
+          logger.error(
+            "Requested 'default_model' but no default embedding model is configured.")
+          throw Abort(
+            .badRequest,
+            reason:
+              "Requested 'default_model' but no default model is configured. Please specify a model or set a default using --embedding-model."
+          )
+        }
+        actualIdToLoad = configuredDefault
+        originalRequestDescription = "default_model (resolved to: \(configuredDefault))"
+      } else {
+        actualIdToLoad = userRequestedId
+        originalRequestDescription = userRequestedId
+      }
+    } else {
+      guard let configuredDefault = self.defaultModelId else {
+        logger.error("No embedding model requested and no default embedding model configured.")
+        throw Abort(
+          .badRequest,
+          reason:
+            "No embedding model specified and no default is configured. Use the 'model' field in your request or start the server with a default --embedding-model."
+        )
+      }
+      actualIdToLoad = configuredDefault
+      originalRequestDescription = "nil (using default: \(configuredDefault))"
     }
 
-    if let current = currentModel, current.modelId == targetModelId || targetModelId == "default_model" {
+    if let currentContainer = currentModelContainer,
+       actualIdToLoad == self.currentModelIdString,
+       let loadedName = self.currentLoadedModelName {
       logger.info(
-        "Returning current embedding model container: \(current.loadedName) (for request: \(targetModelId))"
+        "Returning current embedding model container: \(loadedName) (for request: \(originalRequestDescription))"
       )
-      return (current.container, current.loadedName)
+      return (currentContainer, loadedName)
     }
 
-    await unloadCurrentModel()
-    logger.info("Embedding model '\(targetModelId)' not loaded. Loading container...")
+    if currentModelContainer != nil {
+         logger.info("Requested model '\(actualIdToLoad)' (from request: \(originalRequestDescription)) is different from current '\(self.currentLoadedModelName ?? "unknown")'. Unloading current.")
+         await unloadCurrentModel()
+    } else {
+         logger.info("No model currently loaded.")
+    }
+
+    logger.info("Embedding model '\(actualIdToLoad)' (requested as: \(originalRequestDescription)) not loaded or is different. Loading container...")
 
     let modelConfiguration: ModelConfiguration
-    let expandedPath = NSString(string: targetModelId).expandingTildeInPath
+    let expandedPath = NSString(string: actualIdToLoad).expandingTildeInPath
     var isDirectory: ObjCBool = false
-    var nameToReturn = targetModelId
+    var nameToReturnForThisLoad: String
     var configIdStringForLogging: String
 
     if fileManager.fileExists(atPath: expandedPath, isDirectory: &isDirectory),
@@ -54,14 +87,13 @@ actor EmbeddingModelProvider {
       let localURL = URL(fileURLWithPath: expandedPath)
       logger.info("Loading embedding model from local path: \(expandedPath)")
       modelConfiguration = ModelConfiguration(directory: localURL)
-      nameToReturn = modelConfiguration.name ?? localURL.lastPathComponent
-      nameToReturn = targetModelId
+      nameToReturnForThisLoad = modelConfiguration.name ?? localURL.lastPathComponent
       configIdStringForLogging = localURL.path
     } else {
-      logger.info("Loading embedding model from Hugging Face Hub: \(targetModelId)")
-      modelConfiguration = ModelConfiguration(id: targetModelId)
-      nameToReturn = modelConfiguration.name ?? targetModelId
-      configIdStringForLogging = targetModelId
+      logger.info("Loading embedding model from Hugging Face Hub: \(actualIdToLoad)")
+      modelConfiguration = ModelConfiguration(id: actualIdToLoad)
+      nameToReturnForThisLoad = modelConfiguration.name ?? actualIdToLoad
+      configIdStringForLogging = actualIdToLoad
     }
 
     do {
@@ -70,28 +102,36 @@ actor EmbeddingModelProvider {
       )
       let newContainer = try await mlx_embeddings.loadModelContainer(
         configuration: modelConfiguration)
+
+      let finalLoadedName = modelConfiguration.name ?? nameToReturnForThisLoad
+
       logger.info(
-        "Successfully loaded embedding model container: \(nameToReturn) (from target: \(targetModelId))"
+        "Successfully loaded embedding model container: \(finalLoadedName) (from target: \(actualIdToLoad), requested as: \(originalRequestDescription))"
       )
 
-      let loadedModel = (container: newContainer, loadedName: nameToReturn, modelId: targetModelId)
-      currentModel = loadedModel
+      self.currentModelContainer = newContainer
+      self.currentModelIdString = actualIdToLoad
+      self.currentLoadedModelName = finalLoadedName
 
-      return (loadedModel.container, loadedModel.loadedName)
+      return (newContainer, finalLoadedName)
     } catch {
-      logger.error("Failed to load embedding model container for '\(targetModelId)': \(error)")
+      logger.error(
+        "Failed to load embedding model container for '\(actualIdToLoad)' (requested as: \(originalRequestDescription)): \(error)"
+      )
       throw Abort(
         .internalServerError,
         reason:
-          "Failed to load embedding model container '\(targetModelId)': \(error.localizedDescription)"
+          "Failed to load embedding model container '\(actualIdToLoad)': \(error.localizedDescription)"
       )
     }
   }
 
   private func unloadCurrentModel() async {
-    if let current = currentModel {
-      logger.info("Unloading current model: \(current.loadedName)")
-      currentModel = nil
+    if currentModelContainer != nil {
+      logger.info("Unloading current model: \(currentLoadedModelName ?? "unknown") (ID: \(currentModelIdString ?? "unknown"))")
+      currentModelContainer = nil
+      currentModelIdString = nil
+      currentLoadedModelName = nil
       MLX.GPU.clearCache()
     }
   }
