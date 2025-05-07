@@ -8,189 +8,183 @@ import Hub
 import Tokenizers
 import CoreImage
 
-actor ChatCompletionManager {
-    private let logger: Logger 
-    init(logger: Logger) {
-        self.logger = logger
+private func _processTextOnlyMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
+    let messages: [[String: Any]] = chatRequest.messages.map {
+        ["role": $0.role, "content": $0.content.asString ?? ""]
     }
+    return UserInput(messages: messages)
+}
 
-    func generateChatTokenStream(
-        modelContainer: ModelContainer,
-        tokenizer: Tokenizer,
-        eosTokenId: Int,
-        userInput: UserInput,
-        maxTokens: Int,
-        temperature: Float,
-        topP: Float,
-        repetitionPenalty: Float,
-        repetitionContextSize: Int
-    ) async throws -> AsyncStream<Int> {
-        return AsyncStream { continuation in
-            Task {
-                var generatedTokenCount = 0
-                do {
-                    let generateParameters = GenerateParameters(
-                        temperature: temperature,
-                        topP: topP,
-                        repetitionPenalty: repetitionPenalty,
-                        repetitionContextSize: repetitionContextSize
-                    )
-                    _ = try await modelContainer.perform { context in
-                        logger.debug("Preparing UserInput using model processor...")
-                        guard let processor = context.processor as? UserInputProcessor else {
-                            logger.error("Chat generation requires a UserInputProcessor in the model context.")
-                            throw Abort(.internalServerError, reason: "Model processor invalid for chat input.")
-                        }
-                        let lmInput: LMInput = try await processor.prepare(input: userInput)
-                        logger.debug("UserInput prepared into LMInput.")
+private func _processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
+    var allImages: [UserInput.Image] = []
+    var allVideos: [UserInput.Video] = []
 
-                        try MLXLMCommon.generate(input: lmInput, parameters: generateParameters, context: context) { tokens in
-                            guard let lastToken = tokens.last else { return .more }
-                            if lastToken == eosTokenId { continuation.finish(); return .stop }
-                            guard generatedTokenCount < maxTokens else { continuation.finish(); return .stop }
-                            if lastToken == tokenizer.unknownTokenId {
-                                logger.warning("Generated unknown token ID \(lastToken). Skipping.")
-                            } else {
-                                continuation.yield(lastToken)
-                                generatedTokenCount += 1
-                            }
-                            return .more
-                        }
-                    }
-                    logger.debug("Chat generate function completed or stopped.")
-                    continuation.finish()
-                } catch {
-                    logger.error("Chat token stream error: \(error)")
-                    continuation.finish()
-                }
+    let processedMessages: [[String: Any]] = chatRequest.messages.map { message -> [String: Any] in
+        switch message.content {
+        case .text(let textContent):
+            return ["role": message.role, "content": textContent]
+
+        case .fragments(let fragments):
+            let imageFragments = fragments.filter { $0.type == "image" }
+            let videoFragments = fragments.filter { $0.type == "video" }
+
+            let images = imageFragments.compactMap { fragment in
+                fragment.imageUrl.map { UserInput.Image.url($0) }
             }
-        }
-    }
+            allImages.append(contentsOf: images)
 
-    func estimatePromptTokens(messages: [ChatMessageRequestData], tokenizer: Tokenizer) -> Int {
-        let combinedContent = messages.compactMap { $0.content.asString }.joined(separator: "\n")
-        return tokenizer.encode(text: combinedContent).count
-    }
-
-    func validateProcessor(modelContainer: ModelContainer) async throws {
-        let hasProcessor = await modelContainer.perform { $0.processor is UserInputProcessor }
-        guard hasProcessor else {
-            throw Abort(.internalServerError, reason: "Model processor invalid for chat input.")
-        }
-    }
-
-    func stopSequencesToIds(stopWords: [String], tokenizer: Tokenizer) -> [[Int]] {
-        stopWords.compactMap { word in
-            tokenizer.encode(text: word, addSpecialTokens: false).nilIfEmpty()
-        }
-    }
-
-    func decodeTokens(_ tokens: [Int], tokenizer: Tokenizer) -> String {
-        tokenizer.decode(tokens: tokens)
-    }
-
-    func processUserMessages(_ chatRequest: ChatCompletionRequest, isVLM: Bool) -> UserInput {
-         if isVLM {
-            return processVLMMessages(chatRequest)
-        } else {
-            return processTextOnlyMessages(chatRequest)
-        }
-    }
-
-    private func processTextOnlyMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
-        let messages: [[String: Any]] = chatRequest.messages.map {
-            ["role": $0.role, "content": $0.content.asString ?? ""]
-        }
-        return UserInput(messages: messages)
-    }
-
-    private func processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
-        var allImages: [UserInput.Image] = []
-        var allVideos: [UserInput.Video] = []
-
-        let processedMessages: [[String: Any]] = chatRequest.messages.map { message -> [String: Any] in
-            switch message.content {
-            case .text(let textContent):
-                return ["role": message.role, "content": textContent]
-
-            case .fragments(let fragments):
-                let imageFragments = fragments.filter { $0.type == "image" }
-                let videoFragments = fragments.filter { $0.type == "video" }
-
-                let images = imageFragments.compactMap { fragment in
-                    fragment.imageUrl.map { UserInput.Image.url($0) }
-                }
-                allImages.append(contentsOf: images)
-
-                let videos = videoFragments.compactMap { fragment in
-                    fragment.videoUrl.map { UserInput.Video.url($0) }
-                }
-                allVideos.append(contentsOf: videos)
-
-                if !images.isEmpty || !videos.isEmpty {
-                    var contentFragments: [[String: Any]] = []
-
-                    fragments.forEach { fragment in
-                        if fragment.type == "text", let text = fragment.text {
-                            contentFragments.append(["type": "text", "text": text])
-                        }
-                    }
-
-                    contentFragments.append(contentsOf: imageFragments.map { _ in ["type": "image"] })
-                    contentFragments.append(contentsOf: videoFragments.map { _ in ["type": "video"] })
-
-                    return ["role": message.role, "content": contentFragments]
-                } else {
-                    return ["role": message.role, "content": message.content.asString ?? ""]
-                }
-
-            case .none:
-                return ["role": message.role, "content": ""]
+            let videos = videoFragments.compactMap { fragment in
+                fragment.videoUrl.map { UserInput.Video.url($0) }
             }
-        }
+            allVideos.append(contentsOf: videos)
 
-        var userInput = UserInput(messages: processedMessages, images: allImages, videos: allVideos)
+            if !images.isEmpty || !videos.isEmpty {
+                var contentFragments: [[String: Any]] = []
 
-        if let resize = chatRequest.resize, !resize.isEmpty {
-            let size: CGSize
-            if resize.count == 1 {
-                let v = resize[0]
-                size = CGSize(width: v, height: v)
-            } else if resize.count >= 2 {
-                let v0 = resize[0]
-                let v1 = resize[1]
-                size = CGSize(width: v0, height: v1)
+                fragments.forEach { fragment in
+                    if fragment.type == "text", let text = fragment.text {
+                        contentFragments.append(["type": "text", "text": text])
+                    }
+                }
+
+                contentFragments.append(contentsOf: imageFragments.map { _ in ["type": "image"] })
+                contentFragments.append(contentsOf: videoFragments.map { _ in ["type": "video"] })
+
+                return ["role": message.role, "content": contentFragments]
             } else {
-                size = .zero
+                return ["role": message.role, "content": message.content.asString ?? ""]
             }
 
-            if size != .zero {
-                userInput.processing.resize = size
-            }
+        case .none:
+            return ["role": message.role, "content": ""]
+        }
+    }
+
+    var userInput = UserInput(messages: processedMessages, images: allImages, videos: allVideos)
+
+    if let resize = chatRequest.resize, !resize.isEmpty {
+        let size: CGSize
+        if resize.count == 1 {
+            let v = resize[0]
+            size = CGSize(width: v, height: v)
+        } else if resize.count >= 2 {
+            let v0 = resize[0]
+            let v1 = resize[1]
+            size = CGSize(width: v0, height: v1)
+        } else {
+            size = .zero
         }
 
-        return userInput
+        if size != .zero {
+            userInput.processing.resize = size
+        }
+    }
+
+    return userInput
+}
+
+private func _processUserMessages(_ chatRequest: ChatCompletionRequest, isVLM: Bool) -> UserInput {
+     if isVLM {
+        return _processVLMMessages(chatRequest)
+    } else {
+        return _processTextOnlyMessages(chatRequest)
     }
 }
 
+private func _estimatePromptTokens(messages: [ChatMessageRequestData], tokenizer: Tokenizer) -> Int {
+    let combinedContent = messages.compactMap { $0.content.asString }.joined(separator: "\n")
+    return tokenizer.encode(text: combinedContent).count
+}
+
+private func _validateProcessor(modelContainer: ModelContainer) async throws {
+    let hasProcessor = await modelContainer.perform { $0.processor is UserInputProcessor }
+    guard hasProcessor else {
+        throw Abort(.internalServerError, reason: "Model processor invalid for chat input.")
+    }
+}
+
+private func _stopSequencesToIds(stopWords: [String], tokenizer: Tokenizer) -> [[Int]] {
+    stopWords.compactMap { word in
+        tokenizer.encode(text: word, addSpecialTokens: false).nilIfEmpty()
+    }
+}
+
+private func _decodeTokens(_ tokens: [Int], tokenizer: Tokenizer) -> String {
+    tokenizer.decode(tokens: tokens)
+}
+
+private func _generateChatTokenStream(
+    modelContainer: ModelContainer,
+    tokenizer: Tokenizer,
+    eosTokenId: Int,
+    userInput: UserInput,
+    maxTokens: Int,
+    temperature: Float,
+    topP: Float,
+    repetitionPenalty: Float,
+    repetitionContextSize: Int,
+    logger: Logger
+) async throws -> AsyncStream<Int> {
+    return AsyncStream { continuation in
+        Task {
+            var generatedTokenCount = 0
+            do {
+                let generateParameters = GenerateParameters(
+                    temperature: temperature,
+                    topP: topP,
+                    repetitionPenalty: repetitionPenalty,
+                    repetitionContextSize: repetitionContextSize
+                )
+                _ = try await modelContainer.perform { context in
+                    logger.debug("Preparing UserInput using model processor...")
+                    guard let processor = context.processor as? UserInputProcessor else {
+                        logger.error("Chat generation requires a UserInputProcessor in the model context.")
+                        throw Abort(.internalServerError, reason: "Model processor invalid for chat input.")
+                    }
+                    let lmInput: LMInput = try await processor.prepare(input: userInput)
+                    logger.debug("UserInput prepared into LMInput.")
+
+                    try MLXLMCommon.generate(input: lmInput, parameters: generateParameters, context: context) { tokens in
+                        guard let lastToken = tokens.last else { return .more }
+                        if lastToken == eosTokenId { continuation.finish(); return .stop }
+                        guard generatedTokenCount < maxTokens else { continuation.finish(); return .stop }
+                        if lastToken == tokenizer.unknownTokenId {
+                            logger.warning("Generated unknown token ID \(lastToken). Skipping.")
+                        } else {
+                            continuation.yield(lastToken)
+                            generatedTokenCount += 1
+                        }
+                        return .more
+                    }
+                }
+                logger.debug("Chat generate function completed or stopped.")
+                continuation.finish()
+            } catch {
+                logger.error("Chat token stream error: \(error)")
+                continuation.finish()
+            }
+        }
+    }
+}
+
+
+
 func registerChatCompletionsRoute(
     _ app: Application,
-    modelProvider: ModelProvider, 
+    modelProvider: ModelProvider,
     isVLM: Bool = false
 ) throws {
-    let chatManager = ChatCompletionManager(logger: app.logger)
-
     app.post("v1", "chat", "completions") { req async throws -> Response in
         let chatRequest = try req.content.decode(ChatCompletionRequest.self)
-        let logger = req.logger
-        let reqModelId = chatRequest.model 
+        let logger = req.logger 
+        let reqModelId = chatRequest.model
         let (modelContainer, tokenizer, loadedModelName) = try await modelProvider.getModel(requestedModelId: reqModelId)
         guard let eosTokenId = tokenizer.eosTokenId else {
              throw Abort(.internalServerError, reason: "Tokenizer EOS token ID missing for model \(loadedModelName).")
         }
 
-        let userInput = await chatManager.processUserMessages(chatRequest, isVLM: isVLM)
-        let estimatedPromptTokens = await chatManager.estimatePromptTokens(messages: chatRequest.messages, tokenizer: tokenizer)
+        let userInput = _processUserMessages(chatRequest, isVLM: isVLM)
+        let estimatedPromptTokens = _estimatePromptTokens(messages: chatRequest.messages, tokenizer: tokenizer)
 
         logger.info("Received CHAT completion request for model '\(loadedModelName)', estimated prompt tokens: \(estimatedPromptTokens)")
 
@@ -199,23 +193,21 @@ func registerChatCompletionsRoute(
         let topP = chatRequest.topP ?? GenerationDefaults.topP
         let streamResponse = chatRequest.stream ?? GenerationDefaults.stream
         let stopWords = chatRequest.stop ?? GenerationDefaults.stopSequences
-        let stopIdSequences = await chatManager.stopSequencesToIds(stopWords: stopWords, tokenizer: tokenizer)
+        let stopIdSequences = _stopSequencesToIds(stopWords: stopWords, tokenizer: tokenizer)
         let repetitionPenalty = chatRequest.repetitionPenalty ?? GenerationDefaults.repetitionPenalty
         let repetitionContextSize = chatRequest.repetitionContextSize ?? GenerationDefaults.repetitionContextSize
 
-
-        try await chatManager.validateProcessor(modelContainer: modelContainer)
+        try await _validateProcessor(modelContainer: modelContainer)
 
         let detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
 
         if streamResponse {
-            return try await handleStreamingChatResponse( 
-                chatManager: chatManager,
+            return try await handleStreamingChatResponse(
                 modelContainer: modelContainer,
                 tokenizer: tokenizer,
                 eosTokenId: eosTokenId,
                 userInput: userInput,
-                loadedModelName: loadedModelName, 
+                loadedModelName: loadedModelName,
                 maxTokens: maxTokens,
                 temperature: temperature,
                 topP: topP,
@@ -224,12 +216,11 @@ func registerChatCompletionsRoute(
                 stopIdSequences: stopIdSequences,
                 detokenizer: detokenizer,
                 estimatedPromptTokens: estimatedPromptTokens,
-                logger: logger
+                logger: logger 
             )
         } else {
-             return try await handleNonStreamingChatResponse( 
+             return try await handleNonStreamingChatResponse(
                 req: req,
-                chatManager: chatManager,
                 modelContainer: modelContainer,
                 tokenizer: tokenizer,
                 eosTokenId: eosTokenId,
@@ -242,19 +233,21 @@ func registerChatCompletionsRoute(
                 repetitionContextSize: repetitionContextSize,
                 stopIdSequences: stopIdSequences,
                 estimatedPromptTokens: estimatedPromptTokens,
-                logger: logger
+                logger: logger 
             )
         }
     }
 }
 
+// MARK: - Response Handlers
+
 private func handleStreamingChatResponse(
-    chatManager: ChatCompletionManager,
-    modelContainer: ModelContainer, 
-    tokenizer: Tokenizer,           
-    eosTokenId: Int,                
+    // chatManager: ChatCompletionManager, // Removed
+    modelContainer: ModelContainer,
+    tokenizer: Tokenizer,
+    eosTokenId: Int,
     userInput: UserInput,
-    loadedModelName: String,        
+    loadedModelName: String,
     maxTokens: Int,
     temperature: Float,
     topP: Float,
@@ -263,7 +256,7 @@ private func handleStreamingChatResponse(
     stopIdSequences: [[Int]],
     detokenizer: NaiveStreamingDetokenizer,
     estimatedPromptTokens: Int,
-    logger: Logger
+    logger: Logger // Kept for logging and passing to _generateChatTokenStream
 ) async throws -> Response {
     let headers =  HTTPHeaders([
         ("Content-Type", "text/event-stream"),
@@ -274,7 +267,7 @@ private func handleStreamingChatResponse(
     response.body = .init(stream: { writer in
         let chatId = "chatcmpl-\(UUID().uuidString)"
         let created = Int(Date().timeIntervalSince1970)
-        let systemFingerprint: String? = nil 
+        let systemFingerprint: String? = nil
         var streamDetokenizer = detokenizer
 
         Task {
@@ -287,14 +280,12 @@ private func handleStreamingChatResponse(
 
                 let initialDelta = ChatCompletionDelta(role: "assistant", content: "")
                 let initialChoice = ChatCompletionChoiceDelta(index: 0, delta: initialDelta, finishReason: nil)
-
                 let initialChunk = ChatCompletionChunkResponse(id: chatId, created: created, model: loadedModelName, systemFingerprint: systemFingerprint, choices: [initialChoice])
                 if let initialSse = encodeSSE(response: initialChunk, logger: logger) {
                     try await writer.write(.buffer(.init(string: initialSse)))
                 }
 
-
-                let tokenStream = try await chatManager.generateChatTokenStream(
+                let tokenStream = try await _generateChatTokenStream( // Use standalone function
                     modelContainer: modelContainer,
                     tokenizer: tokenizer,
                     eosTokenId: eosTokenId,
@@ -303,7 +294,8 @@ private func handleStreamingChatResponse(
                     temperature: temperature,
                     topP: topP,
                     repetitionPenalty: repetitionPenalty,
-                    repetitionContextSize: repetitionContextSize
+                    repetitionContextSize: repetitionContextSize,
+                    logger: logger // Pass logger
                 )
 
                 for try await token in tokenStream {
@@ -345,7 +337,7 @@ private func handleStreamingChatResponse(
 
             } catch {
                 logger.error("Chat stream error (ID: \(chatId)): \(error)")
-                finalFinishReason = "error"
+                finalFinishReason = "error" // You might want to send an error event in SSE
             }
 
             await writer.write(.buffer(.init(string: AppConstants.sseDoneMessage)))
@@ -358,12 +350,12 @@ private func handleStreamingChatResponse(
 
 private func handleNonStreamingChatResponse(
     req: Request,
-    chatManager: ChatCompletionManager,
-    modelContainer: ModelContainer, 
-    tokenizer: Tokenizer,           
-    eosTokenId: Int,                
+    // chatManager: ChatCompletionManager, // Removed
+    modelContainer: ModelContainer,
+    tokenizer: Tokenizer,
+    eosTokenId: Int,
     userInput: UserInput,
-    loadedModelName: String,        
+    loadedModelName: String,
     maxTokens: Int,
     temperature: Float,
     topP: Float,
@@ -371,7 +363,7 @@ private func handleNonStreamingChatResponse(
     repetitionContextSize: Int,
     stopIdSequences: [[Int]],
     estimatedPromptTokens: Int,
-    logger: Logger
+    logger: Logger // Kept for logging and passing to _generateChatTokenStream
 ) async throws -> Response {
     var generatedTokens: [Int] = []
     generatedTokens.reserveCapacity(maxTokens)
@@ -381,7 +373,7 @@ private func handleNonStreamingChatResponse(
 
     do {
         logger.info("Starting non-streaming CHAT generation (ID: \(responseId)) for model \(loadedModelName)")
-        let tokenStream = try await chatManager.generateChatTokenStream(
+        let tokenStream = try await _generateChatTokenStream( // Use standalone function
             modelContainer: modelContainer,
             tokenizer: tokenizer,
             eosTokenId: eosTokenId,
@@ -390,7 +382,8 @@ private func handleNonStreamingChatResponse(
             temperature: temperature,
             topP: topP,
             repetitionPenalty: repetitionPenalty,
-            repetitionContextSize: repetitionContextSize
+            repetitionContextSize: repetitionContextSize,
+            logger: logger // Pass logger
         )
 
         for try await token in tokenStream {
@@ -406,7 +399,7 @@ private func handleNonStreamingChatResponse(
             }
         }
 
-        if finalFinishReason != "stop" {
+        if finalFinishReason != "stop" { // If loop finished without hitting a stop condition (e.g. maxTokens)
             finalFinishReason = (generatedTokens.count >= maxTokens) ? "length" : "stop"
         }
     } catch {
@@ -414,7 +407,7 @@ private func handleNonStreamingChatResponse(
         throw Abort(.internalServerError, reason: "Failed to generate chat completion: \(error.localizedDescription)")
     }
 
-    let completionText = await chatManager.decodeTokens(generatedTokens, tokenizer: tokenizer)
+    let completionText = _decodeTokens(generatedTokens, tokenizer: tokenizer) // Use standalone function
     let assistantMessage = ChatMessageResponseData(role: "assistant", content: completionText)
     let chatChoice = ChatCompletionChoice(index: 0, message: assistantMessage, finishReason: finalFinishReason)
     let usage = CompletionUsage(

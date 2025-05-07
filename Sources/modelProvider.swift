@@ -2,10 +2,10 @@ import Vapor
 import Foundation
 import Logging
 import MLX
-import MLXLLM 
+import MLXLLM
 import MLXLMCommon
 import Tokenizers
-import Hub 
+import Hub
 import MLXVLM
 
 actor ModelProvider {
@@ -35,68 +35,76 @@ actor ModelProvider {
     }
 
     func getModel(requestedModelId: String?) async throws -> (ModelContainer, Tokenizer, String) {
-        let targetModelId = requestedModelId ?? defaultModelPath 
+        let actualIdToLoad: String
+        if let reqId = requestedModelId, reqId.lowercased() != "default_model" {
+            actualIdToLoad = reqId
+        } else {
+            actualIdToLoad = self.defaultModelPath
+        }
 
-        if let currentContainer = currentModelContainer, 
-           (targetModelId == self.currentModelIdString || targetModelId == "default_model") {
-            logger.info("Returning cached model: \(self.currentModelIdString ?? targetModelId)")
+        logger.debug("getModel: Requested='\(requestedModelId ?? "nil (default)")', Resolved actualIdToLoad='\(actualIdToLoad)'")
+
+        if let currentContainer = currentModelContainer,
+           actualIdToLoad == self.currentModelIdString, 
+           let loadedName = self.currentLoadedModelName {
+            logger.info("Returning cached model: \(loadedName) (ID: \(self.currentModelIdString ?? "unknown"))")
             let tokenizer = await currentContainer.perform { $0.tokenizer }
-            return (currentContainer, tokenizer, self.currentLoadedModelName ?? targetModelId)
+            return (currentContainer, tokenizer, loadedName)
         }
 
         logger.info(
-            "Request for model '\(targetModelId)', current is '\(self.currentModelIdString ?? "none")'. Loading..."
+            "Request for model to load '\(actualIdToLoad)' (requested: '\(requestedModelId ?? "default")'). Current loaded is '\(self.currentModelIdString ?? "none")'. Needs loading/reloading."
         )
 
         if currentModelContainer != nil {
-             let unloadedModelId = self.currentModelIdString ?? "unknown" 
-             logger.info("Unloading previous model: \(unloadedModelId)")
-             currentModelContainer = nil
+             let unloadedModelId = self.currentModelIdString ?? "unknown"
+             let unloadedModelName = self.currentLoadedModelName ?? "unknown"
+             logger.info("Unloading previous model: \(unloadedModelName) (ID: \(unloadedModelId))")
+             currentModelContainer = nil 
              currentModelConfig = nil
              currentModelIdString = nil
              currentLoadedModelName = nil
-             MLX.GPU.clearCache()
-             logger.info("Cleared MLX GPU cache after unloading model \(unloadedModelId).")
+             MLX.GPU.clearCache() 
+             logger.info("Cleared MLX GPU cache after preparing to load new model.")
         }
 
         let modelConfiguration: ModelConfiguration
-        let expandedPath = NSString(string: targetModelId).expandingTildeInPath
-
+        let expandedPath = NSString(string: actualIdToLoad).expandingTildeInPath
         var isDirectory: ObjCBool = false
-        var nameToReturn = targetModelId
+        var nameToReturnForThisLoad = actualIdToLoad 
 
         if fileManager.fileExists(atPath: expandedPath, isDirectory: &isDirectory),
            isDirectory.boolValue
         {
             logger.info("Loading model from local path: \(expandedPath)")
             modelConfiguration = ModelConfiguration(directory: URL(fileURLWithPath: expandedPath))
-            nameToReturn = modelConfiguration.name ?? URL(fileURLWithPath: expandedPath).lastPathComponent
-
+            nameToReturnForThisLoad = modelConfiguration.name ?? URL(fileURLWithPath: expandedPath).lastPathComponent
         } else {
-            logger.info("Loading model from Hugging Face Hub: \(targetModelId)")
-            modelConfiguration = modelFactory.configuration(id: targetModelId)
-            nameToReturn = modelConfiguration.name
+            logger.info("Loading model from Hugging Face Hub: \(actualIdToLoad)")
+            modelConfiguration = modelFactory.configuration(id: actualIdToLoad)
+            nameToReturnForThisLoad = modelConfiguration.name 
         }
 
         do {
+            logger.info("Attempting to load: \(nameToReturnForThisLoad) using configuration for \(actualIdToLoad)")
             let newContainer = try await modelFactory.loadContainer(configuration: modelConfiguration)
             let newTokenizer = await newContainer.perform { $0.tokenizer }
 
             self.currentModelContainer = newContainer
             self.currentModelConfig = modelConfiguration
-            self.currentModelIdString = targetModelId 
-            self.currentLoadedModelName = nameToReturn 
-            logger.info("Successfully loaded model: \(nameToReturn) (from target: \(targetModelId))")
-            return (newContainer, newTokenizer, nameToReturn)
+            self.currentModelIdString = actualIdToLoad 
+            self.currentLoadedModelName = nameToReturnForThisLoad
+            logger.info("Successfully loaded model: \(nameToReturnForThisLoad) (from ID/path: \(actualIdToLoad))")
+            return (newContainer, newTokenizer, nameToReturnForThisLoad)
         } catch {
-            logger.error("Failed to load model \(targetModelId): \(error)")
+            logger.error("Failed to load model with ID/path '\(actualIdToLoad)' (resolved from request '\(requestedModelId ?? "default")'): \(error)")
             self.currentModelContainer = nil
             self.currentModelConfig = nil
             self.currentModelIdString = nil
             self.currentLoadedModelName = nil
             throw Abort(
                 .internalServerError,
-                reason: "Failed to load requested model '\(targetModelId)': \(error.localizedDescription)")
+                reason: "Failed to load requested model '\(actualIdToLoad)': \(error.localizedDescription)")
         }
     }
 
@@ -104,20 +112,16 @@ actor ModelProvider {
         return currentLoadedModelName
     }
 
-     func getAvailableModelIDs() async -> [String] {
+    func getAvailableModelIDs() async -> [String] {
         logger.info("Scanning for available MLX models in \(modelDownloadBaseURL.path)...")
         var foundModelIds = Set<String>()
 
-        if let currentId = self.currentModelIdString {
-            foundModelIds.insert(currentId)
-        }
-
-        let modelsRootURL = modelDownloadBaseURL.appendingPathComponent("models", isDirectory: true) 
+        let modelsRootURL = modelDownloadBaseURL.appendingPathComponent("models", isDirectory: true)
 
         guard fileManager.fileExists(atPath: modelsRootURL.path) else {
             logger.warning(
                 "Models directory does not exist at \(modelsRootURL.path). Cannot scan for cached models.")
-            return Array(foundModelIds).sorted()
+            return Array(foundModelIds).sorted() 
         }
 
         logger.debug("Scanning models directory: \(modelsRootURL.path)")
@@ -140,14 +144,15 @@ actor ModelProvider {
                         (try? modelNameDirURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
                     else { continue }
                     let modelName = modelNameDirURL.lastPathComponent
-                    let repoId = "\(orgName)/\(modelName)" 
+                    let repoId = "\(orgName)/\(modelName)"
 
                     logger.debug(
                         "Checking potential model directory: \(modelNameDirURL.path) for ID: \(repoId)")
 
                     if isMLXModelDirectory(modelNameDirURL) {
                         logger.debug("Found valid MLX model: \(repoId)")
-                        foundModelIds.insert(repoId)                     } else {
+                        foundModelIds.insert(repoId)
+                    } else {
                         logger.debug("Directory \(modelNameDirURL.path) is not a valid MLX model.")
                     }
                 }
@@ -156,7 +161,7 @@ actor ModelProvider {
             logger.error("Error scanning models directory \(modelsRootURL.path): \(error)")
         }
         let sortedModels = Array(foundModelIds).sorted()
-        logger.info("Scan complete. Found potential models: \(sortedModels)")
+        logger.info("Scan complete. Found potential models from \(modelDownloadBaseURL.path): \(sortedModels)")
         return sortedModels
      }
 
@@ -173,7 +178,7 @@ actor ModelProvider {
         let indexExists = fileManager.fileExists(atPath: indexPath)
 
         var weightsExist = false
-        if !indexExists {
+        if !indexExists { 
             do {
                 let files = try fileManager.contentsOfDirectory(atPath: dirURL.path)
                 weightsExist = files.contains { $0.hasSuffix(".safetensors") }
