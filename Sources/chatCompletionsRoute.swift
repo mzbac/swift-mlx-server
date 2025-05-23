@@ -8,8 +8,6 @@ import Hub
 import Tokenizers
 import CoreImage
 
-// MARK: - Custom Errors
-
 private struct ChatProcessingError: AbortError {
     var status: HTTPResponseStatus
     var reason: String
@@ -25,7 +23,7 @@ private struct ChatProcessingError: AbortError {
             fullReason += ". Underlying error: \(underlyingError.localizedDescription)"
         }
         self.reason = fullReason
-        self.identifier = modelName // Or a more specific identifier if needed
+        self.identifier = modelName
     }
 }
 
@@ -33,7 +31,6 @@ private struct ChatProcessingError: AbortError {
 private struct MessageProcessingKeys {
     static let role = "role"
     static let content = "content"
-    // For VLM content fragments
     static let type = "type"
     static let text = "text"
     static let imageType = "image"
@@ -271,10 +268,7 @@ func registerChatCompletionsRoute(
     }
 }
 
-// MARK: - Response Handlers
-
 private func handleStreamingChatResponse(
-    // chatManager: ChatCompletionManager, // Removed
     modelContainer: ModelContainer,
     tokenizer: Tokenizer,
     eosTokenId: Int,
@@ -288,7 +282,7 @@ private func handleStreamingChatResponse(
     stopIdSequences: [[Int]],
     detokenizer: NaiveStreamingDetokenizer,
     estimatedPromptTokens: Int,
-    logger: Logger // Kept for logging and passing to _generateChatTokenStream
+    logger: Logger
 ) async throws -> Response {
     let headers =  HTTPHeaders([
         ("Content-Type", "text/event-stream"),
@@ -317,7 +311,7 @@ private func handleStreamingChatResponse(
                     try await writer.write(.buffer(.init(string: initialSse)))
                 }
 
-                let tokenStream = try await _generateChatTokenStream( // Use standalone function
+                let tokenStream = try await _generateChatTokenStream(
                     modelContainer: modelContainer,
                     tokenizer: tokenizer,
                     eosTokenId: eosTokenId,
@@ -327,7 +321,7 @@ private func handleStreamingChatResponse(
                     topP: topP,
                     repetitionPenalty: repetitionPenalty,
                     repetitionContextSize: repetitionContextSize,
-                    logger: logger // Pass logger
+                    logger: logger
                 )
 
                 for try await token in tokenStream {
@@ -369,7 +363,7 @@ private func handleStreamingChatResponse(
 
             } catch {
                 logger.error("Chat stream error (ID: \(chatId)): \(error)")
-                finalFinishReason = "error" // You might want to send an error event in SSE
+                finalFinishReason = "error"
             }
 
             await writer.write(.buffer(.init(string: AppConstants.sseDoneMessage)))
@@ -382,7 +376,6 @@ private func handleStreamingChatResponse(
 
 private func handleNonStreamingChatResponse(
     req: Request,
-    // chatManager: ChatCompletionManager, // Removed
     modelContainer: ModelContainer,
     tokenizer: Tokenizer,
     eosTokenId: Int,
@@ -395,7 +388,7 @@ private func handleNonStreamingChatResponse(
     repetitionContextSize: Int,
     stopIdSequences: [[Int]],
     estimatedPromptTokens: Int,
-    logger: Logger // Kept for logging and passing to _generateChatTokenStream
+    logger: Logger
 ) async throws -> Response {
     var generatedTokens: [Int] = []
     generatedTokens.reserveCapacity(maxTokens)
@@ -405,7 +398,7 @@ private func handleNonStreamingChatResponse(
 
     do {
         logger.info("Starting non-streaming CHAT generation (ID: \(responseId)) for model \(loadedModelName)")
-        let tokenStream = try await _generateChatTokenStream( // Use standalone function
+        let tokenStream = try await _generateChatTokenStream(
             modelContainer: modelContainer,
             tokenizer: tokenizer,
             eosTokenId: eosTokenId,
@@ -415,7 +408,7 @@ private func handleNonStreamingChatResponse(
             topP: topP,
             repetitionPenalty: repetitionPenalty,
             repetitionContextSize: repetitionContextSize,
-            logger: logger // Pass logger
+            logger: logger
         )
 
         for try await token in tokenStream {
@@ -431,7 +424,7 @@ private func handleNonStreamingChatResponse(
             }
         }
 
-        if finalFinishReason != "stop" { // If loop finished without hitting a stop condition (e.g. maxTokens)
+        if finalFinishReason != "stop" {
             finalFinishReason = (generatedTokens.count >= maxTokens) ? "length" : "stop"
         }
     } catch {
@@ -439,7 +432,7 @@ private func handleNonStreamingChatResponse(
         throw ChatProcessingError(status: .internalServerError, reason: "Failed to generate chat completion", underlyingError: error)
     }
 
-    let completionText = _decodeTokens(generatedTokens, tokenizer: tokenizer) // Use standalone function
+    let completionText = _decodeTokens(generatedTokens, tokenizer: tokenizer)
     let assistantMessage = ChatMessageResponseData(role: "assistant", content: completionText)
     let chatChoice = ChatCompletionChoice(index: 0, message: assistantMessage, finishReason: finalFinishReason)
     let usage = CompletionUsage(

@@ -6,12 +6,10 @@ import MLXLMCommon
 import Tokenizers
 import Vapor
 
-// MARK: - Custom Errors
-
 private struct TextCompletionError: AbortError {
     var status: HTTPResponseStatus
     var reason: String
-    var identifier: String? // For modelName or similar context
+    var identifier: String?
 
     init(status: HTTPResponseStatus, reason: String, modelName: String? = nil, underlyingError: Error? = nil) {
         self.status = status
@@ -84,8 +82,6 @@ func registerTextCompletionsRoute(
     let completionRequest = try req.content.decode(CompletionRequest.self)
     let logger = req.logger
     let reqModelName = completionRequest.model
-    // Generate a base ID for the request early.
-    // Specific IDs for streaming/non-streaming will be derived or used directly.
     let baseCompletionId = "cmpl-\(UUID().uuidString)"
 
     let (modelContainer, tokenizer, loadedModelName) = try await modelProvider.getModel(
@@ -113,11 +109,14 @@ func registerTextCompletionsRoute(
 
     var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
     if streamResponse {
-      let headers = HTTPHeaders([ /* ... */])
+      let headers = HTTPHeaders([
+        ("Content-Type", "text/event-stream"),
+        ("Cache-Control", "no-cache"),
+        ("Connection", "keep-alive"),
+      ])
       let response = Response(status: .ok, headers: headers)
       response.body = .init(stream: { writer in
         Task {
-          // Use the base ID for streaming context
           let streamCompletionId = baseCompletionId
           var generatedTokens: [Int] = []
           var finalFinishReason: String? = nil
@@ -145,7 +144,7 @@ func registerTextCompletionsRoute(
 
               if let newTextChunk = detokenizer.next() {
                 let chunkResponse = CompletionChunkResponse(
-                  completionId: completionId, requestedModel: loadedModelName,
+                  completionId: baseCompletionId, requestedModel: loadedModelName,
                   nextChunk: newTextChunk)
                 if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
                   try await writer.write(.buffer(.init(string: sseString)))
@@ -162,7 +161,6 @@ func registerTextCompletionsRoute(
       })
       return response
     } else {
-      // Use the base ID for non-streaming context
       let nonStreamCompletionId = baseCompletionId
       var generatedTokens: [Int] = []
       var finalFinishReason = "stop"
@@ -201,7 +199,7 @@ func registerTextCompletionsRoute(
         promptTokens: promptTokens.count, completionTokens: generatedTokens.count,
         totalTokens: promptTokens.count + generatedTokens.count)
       let completionResponse = CompletionResponse(
-        id: nonStreamCompletionId, // Use the ID in the response
+        id: nonStreamCompletionId,
         model: loadedModelName, choices: [choice], usage: usage)
       return try await completionResponse.encodeResponse(for: req)
     }

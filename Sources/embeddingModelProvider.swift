@@ -6,12 +6,10 @@ import Tokenizers
 import Vapor
 import mlx_embeddings
 
-// MARK: - Custom Errors
-
 private struct EmbeddingModelProviderError: AbortError {
     var status: HTTPResponseStatus
     var reason: String
-    var identifier: String? // For modelId or similar context
+    var identifier: String?
 
     init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
         self.status = status

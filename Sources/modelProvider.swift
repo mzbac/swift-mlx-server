@@ -8,12 +8,10 @@ import Tokenizers
 import Hub
 import MLXVLM
 
-// MARK: - Custom Errors
-
 private struct ModelProviderError: AbortError {
     var status: HTTPResponseStatus
     var reason: String
-    var identifier: String? // For modelId or similar context
+    var identifier: String?
 
     init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
         self.status = status
