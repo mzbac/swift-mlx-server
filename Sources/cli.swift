@@ -128,5 +128,3 @@ struct MLXServer: AsyncParsableCommand {
     }
   }
 }
-
-extension Array { func nilIfEmpty() -> Self? { self.isEmpty ? nil : self } }

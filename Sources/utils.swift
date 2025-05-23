@@ -56,3 +56,5 @@ func encodeSSE<T: Encodable>(response: T, logger: Logger) -> String? {
     return nil
   }
 }
+
+extension Array { func nilIfEmpty() -> Self? { self.isEmpty ? nil : self } }

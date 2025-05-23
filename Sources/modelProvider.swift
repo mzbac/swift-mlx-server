@@ -8,6 +8,27 @@ import Tokenizers
 import Hub
 import MLXVLM
 
+// MARK: - Custom Errors
+
+private struct ModelProviderError: AbortError {
+    var status: HTTPResponseStatus
+    var reason: String
+    var identifier: String? // For modelId or similar context
+
+    init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
+        self.status = status
+        var fullReason = reason
+        if let modelId = modelId, !modelId.isEmpty {
+            fullReason += " (Model ID: \(modelId))"
+        }
+        if let underlyingError = underlyingError {
+            fullReason += ". Underlying error: \(underlyingError.localizedDescription)"
+        }
+        self.reason = fullReason
+        self.identifier = modelId
+    }
+}
+
 actor ModelProvider {
     private var currentModelConfig: ModelConfiguration?
     private var currentModelContainer: ModelContainer?
@@ -102,9 +123,12 @@ actor ModelProvider {
             self.currentModelConfig = nil
             self.currentModelIdString = nil
             self.currentLoadedModelName = nil
-            throw Abort(
-                .internalServerError,
-                reason: "Failed to load requested model '\(actualIdToLoad)': \(error.localizedDescription)")
+            throw ModelProviderError(
+                status: .internalServerError,
+                reason: "Failed to load requested model",
+                modelId: actualIdToLoad,
+                underlyingError: error
+            )
         }
     }
 
@@ -149,7 +173,7 @@ actor ModelProvider {
                     logger.debug(
                         "Checking potential model directory: \(modelNameDirURL.path) for ID: \(repoId)")
 
-                    if isMLXModelDirectory(modelNameDirURL) {
+                    if _isMLXModelDirectory(modelNameDirURL) {
                         logger.debug("Found valid MLX model: \(repoId)")
                         foundModelIds.insert(repoId)
                     } else {
@@ -165,7 +189,7 @@ actor ModelProvider {
         return sortedModels
      }
 
-    private func isMLXModelDirectory(_ dirURL: URL) -> Bool {
+    private func _isMLXModelDirectory(_ dirURL: URL) -> Bool {
         let configPath = dirURL.appendingPathComponent("config.json").path
         let tokenizerPath = dirURL.appendingPathComponent("tokenizer.json").path
         let tokenizerModelPath = dirURL.appendingPathComponent("tokenizer.model").path

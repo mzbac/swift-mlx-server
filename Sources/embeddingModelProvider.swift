@@ -6,6 +6,27 @@ import Tokenizers
 import Vapor
 import mlx_embeddings
 
+// MARK: - Custom Errors
+
+private struct EmbeddingModelProviderError: AbortError {
+    var status: HTTPResponseStatus
+    var reason: String
+    var identifier: String? // For modelId or similar context
+
+    init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
+        self.status = status
+        var fullReason = reason
+        if let modelId = modelId, !modelId.isEmpty {
+            fullReason += " (Model ID: \(modelId))"
+        }
+        if let underlyingError = underlyingError {
+            fullReason += ". Underlying error: \(underlyingError.localizedDescription)"
+        }
+        self.reason = fullReason
+        self.identifier = modelId
+    }
+}
+
 actor EmbeddingModelProvider {
   private var currentModelContainer: mlx_embeddings.ModelContainer?
   private var currentModelIdString: String?
@@ -32,10 +53,9 @@ actor EmbeddingModelProvider {
         guard let configuredDefault = self.defaultModelId else {
           logger.error(
             "Requested 'default_model' but no default embedding model is configured.")
-          throw Abort(
-            .badRequest,
-            reason:
-              "Requested 'default_model' but no default model is configured. Please specify a model or set a default using --embedding-model."
+          throw EmbeddingModelProviderError(
+            status: .badRequest,
+            reason: "Requested 'default_model' but no default model is configured. Please specify a model or set a default using --embedding-model."
           )
         }
         actualIdToLoad = configuredDefault
@@ -47,10 +67,9 @@ actor EmbeddingModelProvider {
     } else {
       guard let configuredDefault = self.defaultModelId else {
         logger.error("No embedding model requested and no default embedding model configured.")
-        throw Abort(
-          .badRequest,
-          reason:
-            "No embedding model specified and no default is configured. Use the 'model' field in your request or start the server with a default --embedding-model."
+        throw EmbeddingModelProviderError(
+            status: .badRequest,
+            reason: "No embedding model specified and no default is configured. Use the 'model' field in your request or start the server with a default --embedding-model."
         )
       }
       actualIdToLoad = configuredDefault
@@ -68,7 +87,7 @@ actor EmbeddingModelProvider {
 
     if currentModelContainer != nil {
          logger.info("Requested model '\(actualIdToLoad)' (from request: \(originalRequestDescription)) is different from current '\(self.currentLoadedModelName ?? "unknown")'. Unloading current.")
-         await unloadCurrentModel()
+         await _unloadCurrentModel()
     } else {
          logger.info("No model currently loaded.")
     }
@@ -118,15 +137,16 @@ actor EmbeddingModelProvider {
       logger.error(
         "Failed to load embedding model container for '\(actualIdToLoad)' (requested as: \(originalRequestDescription)): \(error)"
       )
-      throw Abort(
-        .internalServerError,
-        reason:
-          "Failed to load embedding model container '\(actualIdToLoad)': \(error.localizedDescription)"
+      throw EmbeddingModelProviderError(
+        status: .internalServerError,
+        reason: "Failed to load embedding model container",
+        modelId: actualIdToLoad,
+        underlyingError: error
       )
     }
   }
 
-  private func unloadCurrentModel() async {
+  private func _unloadCurrentModel() async {
     if currentModelContainer != nil {
       logger.info("Unloading current model: \(currentLoadedModelName ?? "unknown") (ID: \(currentModelIdString ?? "unknown"))")
       currentModelContainer = nil
