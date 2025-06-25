@@ -3,14 +3,67 @@ import Foundation
 import Logging
 import MLX
 import MLXLLM
-import MLXLMCommon
+@preconcurrency import MLXLMCommon
 import Hub
-import Tokenizers
+@preconcurrency import Tokenizers
 import CoreImage
+
+private final class AtomicCounter {
+    private let lock = NSLock()
+    private var _value = 0
+    
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _value
+    }
+    
+    func increment() {
+        lock.lock()
+        defer { lock.unlock() }
+        _value += 1
+    }
+}
+
+private enum MessageProcessingKeys {
+    static let role = "role"
+    static let content = "content"
+    static let type = "type"
+    static let text = "text"
+    static let imageType = "image"
+    static let videoType = "video"
+}
+
+private struct ChatGenerationContext {
+    let modelContainer: ModelContainer
+    let tokenizer: Tokenizer
+    let eosTokenId: Int
+    let userInput: UserInput
+    let logger: Logger
+    let promptCacheManager: PromptCacheManager?
+}
+
+private struct ChatGenerationParameters {
+    let maxTokens: Int
+    let temperature: Float
+    let topP: Float
+    let repetitionPenalty: Float
+    let repetitionContextSize: Int
+    let kvBits: Int?
+    let kvGroupSize: Int
+    let quantizedKVStart: Int
+}
+
+private struct ChatResponseContext {
+    let loadedModelName: String
+    let stopIdSequences: [[Int]]
+    let detokenizer: NaiveStreamingDetokenizer
+    let estimatedPromptTokens: Int
+}
 
 private func _processTextOnlyMessages(_ chatRequest: ChatCompletionRequest) -> UserInput {
     let messages: [[String: Any]] = chatRequest.messages.map {
-        ["role": $0.role, "content": $0.content.asString ?? ""]
+        [MessageProcessingKeys.role: $0.role, MessageProcessingKeys.content: $0.content.asString ?? ""]
     }
     return UserInput(messages: messages)
 }
@@ -22,11 +75,11 @@ private func _processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserIn
     let processedMessages: [[String: Any]] = chatRequest.messages.map { message -> [String: Any] in
         switch message.content {
         case .text(let textContent):
-            return ["role": message.role, "content": textContent]
+            return [MessageProcessingKeys.role: message.role, MessageProcessingKeys.content: textContent]
 
         case .fragments(let fragments):
-            let imageFragments = fragments.filter { $0.type == "image" }
-            let videoFragments = fragments.filter { $0.type == "video" }
+            let imageFragments = fragments.filter { $0.type == MessageProcessingKeys.imageType }
+            let videoFragments = fragments.filter { $0.type == MessageProcessingKeys.videoType }
 
             let images = imageFragments.compactMap { fragment in
                 fragment.imageUrl.map { UserInput.Image.url($0) }
@@ -42,21 +95,21 @@ private func _processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserIn
                 var contentFragments: [[String: Any]] = []
 
                 fragments.forEach { fragment in
-                    if fragment.type == "text", let text = fragment.text {
-                        contentFragments.append(["type": "text", "text": text])
+                    if fragment.type == MessageProcessingKeys.text, let text = fragment.text {
+                        contentFragments.append([MessageProcessingKeys.type: MessageProcessingKeys.text, MessageProcessingKeys.text: text])
                     }
                 }
 
-                contentFragments.append(contentsOf: imageFragments.map { _ in ["type": "image"] })
-                contentFragments.append(contentsOf: videoFragments.map { _ in ["type": "video"] })
+                contentFragments.append(contentsOf: imageFragments.map { _ in [MessageProcessingKeys.type: MessageProcessingKeys.imageType] })
+                contentFragments.append(contentsOf: videoFragments.map { _ in [MessageProcessingKeys.type: MessageProcessingKeys.videoType] })
 
-                return ["role": message.role, "content": contentFragments]
+                return [MessageProcessingKeys.role: message.role, MessageProcessingKeys.content: contentFragments]
             } else {
-                return ["role": message.role, "content": message.content.asString ?? ""]
+                return [MessageProcessingKeys.role: message.role, MessageProcessingKeys.content: message.content.asString ?? ""]
             }
 
         case .none:
-            return ["role": message.role, "content": ""]
+            return [MessageProcessingKeys.role: message.role, MessageProcessingKeys.content: ""]
         }
     }
 
@@ -65,8 +118,8 @@ private func _processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserIn
     if let resize = chatRequest.resize, !resize.isEmpty {
         let size: CGSize
         if resize.count == 1 {
-            let v = resize[0]
-            size = CGSize(width: v, height: v)
+            let value = resize[0]
+            size = CGSize(width: value, height: value)
         } else if resize.count >= 2 {
             let v0 = resize[0]
             let v1 = resize[1]
@@ -84,7 +137,7 @@ private func _processVLMMessages(_ chatRequest: ChatCompletionRequest) -> UserIn
 }
 
 private func _processUserMessages(_ chatRequest: ChatCompletionRequest, isVLM: Bool) -> UserInput {
-     if isVLM {
+    if isVLM {
         return _processVLMMessages(chatRequest)
     } else {
         return _processTextOnlyMessages(chatRequest)
@@ -97,82 +150,107 @@ private func _estimatePromptTokens(messages: [ChatMessageRequestData], tokenizer
 }
 
 private func _validateProcessor(modelContainer: ModelContainer) async throws {
-    let hasProcessor = await modelContainer.perform { $0.processor is UserInputProcessor }
-    guard hasProcessor else {
-        throw Abort(.internalServerError, reason: "Model processor invalid for chat input.")
+    _ = await modelContainer.perform { context in
+        _ = context.processor
     }
-}
-
-private func _stopSequencesToIds(stopWords: [String], tokenizer: Tokenizer) -> [[Int]] {
-    stopWords.compactMap { word in
-        tokenizer.encode(text: word, addSpecialTokens: false).nilIfEmpty()
-    }
-}
-
-private func _decodeTokens(_ tokens: [Int], tokenizer: Tokenizer) -> String {
-    tokenizer.decode(tokens: tokens)
 }
 
 private func _generateChatTokenStream(
-    modelContainer: ModelContainer,
-    tokenizer: Tokenizer,
-    eosTokenId: Int,
-    userInput: UserInput,
-    maxTokens: Int,
-    temperature: Float,
-    topP: Float,
-    repetitionPenalty: Float,
-    repetitionContextSize: Int,
-    logger: Logger
+    context: ChatGenerationContext,
+    parameters: ChatGenerationParameters
 ) async throws -> AsyncStream<Int> {
     return AsyncStream { continuation in
         Task {
-            var generatedTokenCount = 0
+            let tokenCount = AtomicCounter()
             do {
                 let generateParameters = GenerateParameters(
-                    temperature: temperature,
-                    topP: topP,
-                    repetitionPenalty: repetitionPenalty,
-                    repetitionContextSize: repetitionContextSize
+                    kvBits: parameters.kvBits,
+                    kvGroupSize: parameters.kvGroupSize,
+                    quantizedKVStart: parameters.quantizedKVStart,
+                    temperature: parameters.temperature,
+                    topP: parameters.topP,
+                    repetitionPenalty: parameters.repetitionPenalty,
+                    repetitionContextSize: parameters.repetitionContextSize
                 )
-                _ = try await modelContainer.perform { context in
-                    logger.debug("Preparing UserInput using model processor...")
-                    guard let processor = context.processor as? UserInputProcessor else {
-                        logger.error("Chat generation requires a UserInputProcessor in the model context.")
-                        throw Abort(.internalServerError, reason: "Model processor invalid for chat input.")
-                    }
-                    let lmInput: LMInput = try await processor.prepare(input: userInput)
-                    logger.debug("UserInput prepared into LMInput.")
-
-                    try MLXLMCommon.generate(input: lmInput, parameters: generateParameters, context: context) { tokens in
-                        guard let lastToken = tokens.last else { return .more }
-                        if lastToken == eosTokenId { continuation.finish(); return .stop }
-                        guard generatedTokenCount < maxTokens else { continuation.finish(); return .stop }
-                        if lastToken == tokenizer.unknownTokenId {
-                            logger.warning("Generated unknown token ID \(lastToken). Skipping.")
-                        } else {
-                            continuation.yield(lastToken)
-                            generatedTokenCount += 1
+                _ = try await context.modelContainer.perform { modelContext in
+                    context.logger.debug("Preparing UserInput using model processor...")
+                    let lmInput: LMInput = try await modelContext.processor.prepare(input: context.userInput)
+                    context.logger.debug("UserInput prepared into LMInput.")
+                    
+                    let promptTokens = lmInput.text.tokens.asArray(Int.self)
+                    
+                    var tokensToProcess: [Int] = []
+                    var existingCache: [KVCache]?
+                    
+                    if let cacheManager = context.promptCacheManager {
+                        tokensToProcess = promptTokens
+                        let modelKey = await context.modelContainer.configuration.name
+                        let cacheResult = await cacheManager.getCachedState(
+                            modelKey: modelKey,
+                            tokens: promptTokens,
+                            parameters: generateParameters,
+                            model: modelContext.model
+                        )
+                        tokensToProcess = cacheResult.tokensToProcess
+                        existingCache = cacheResult.cache
+                        
+                        if existingCache != nil {
+                            context.logger.info("Using cached prompt prefix, processing \(tokensToProcess.count) new tokens")
                         }
-                        return .more
+                    }
+                    
+                    let inputForGeneration = tokensToProcess.isEmpty ? lmInput : LMInput(tokens: MLXArray(tokensToProcess))
+                    
+                    let cache = existingCache ?? modelContext.model.newCache(parameters: generateParameters)
+                    
+                    let iterator = try TokenIterator(
+                        input: inputForGeneration,
+                        model: modelContext.model,
+                        cache: cache,
+                        parameters: generateParameters
+                    )
+                    
+                    var allGeneratedTokens: [Int] = []
+                    
+                    for token in iterator {
+                        if token == context.eosTokenId { break }
+                        if tokenCount.value >= parameters.maxTokens { break }
+                        
+                        if token == context.tokenizer.unknownTokenId {
+                            context.logger.warning("Generated unknown token ID \(token). Skipping.")
+                        } else {
+                            continuation.yield(token)
+                            tokenCount.increment()
+                            allGeneratedTokens.append(token)
+                        }
+                    }
+                    
+                    if let cacheManager = context.promptCacheManager {
+                        let fullTokens = promptTokens + allGeneratedTokens
+                        await cacheManager.updateCache(
+                            modelKey: context.modelContainer.configuration.name,
+                            tokens: fullTokens,
+                            kvCaches: cache,
+                            parameters: generateParameters,
+                            model: modelContext.model
+                        )
                     }
                 }
-                logger.debug("Chat generate function completed or stopped.")
+                context.logger.debug("Chat generate function completed or stopped.")
                 continuation.finish()
             } catch {
-                logger.error("Chat token stream error: \(error)")
+                context.logger.error("Chat token stream error: \(error)")
                 continuation.finish()
             }
         }
     }
 }
 
-
-
 func registerChatCompletionsRoute(
     _ app: Application,
     modelProvider: ModelProvider,
-    isVLM: Bool = false
+    isVLM: Bool = false,
+    promptCacheManager: PromptCacheManager? = nil
 ) throws {
     app.post("v1", "chat", "completions") { req async throws -> Response in
         let chatRequest = try req.content.decode(ChatCompletionRequest.self)
@@ -180,10 +258,14 @@ func registerChatCompletionsRoute(
         let reqModelId = chatRequest.model
         let (modelContainer, tokenizer, loadedModelName) = try await modelProvider.getModel(requestedModelId: reqModelId)
         guard let eosTokenId = tokenizer.eosTokenId else {
-             throw Abort(.internalServerError, reason: "Tokenizer EOS token ID missing for model \(loadedModelName).")
+             throw ProcessingError(status: .internalServerError, reason: "Tokenizer EOS token ID missing", modelId: loadedModelName)
         }
 
         let userInput = _processUserMessages(chatRequest, isVLM: isVLM)
+        
+        if isVLM {
+            logger.info("VLM: Processing request with \(userInput.images.count) images and \(userInput.videos.count) videos")
+        }
         let estimatedPromptTokens = _estimatePromptTokens(messages: chatRequest.messages, tokenizer: tokenizer)
 
         logger.info("Received CHAT completion request for model '\(loadedModelName)', estimated prompt tokens: \(estimatedPromptTokens)")
@@ -193,115 +275,130 @@ func registerChatCompletionsRoute(
         let topP = chatRequest.topP ?? GenerationDefaults.topP
         let streamResponse = chatRequest.stream ?? GenerationDefaults.stream
         let stopWords = chatRequest.stop ?? GenerationDefaults.stopSequences
-        let stopIdSequences = _stopSequencesToIds(stopWords: stopWords, tokenizer: tokenizer)
+        let stopIdSequences = stopSequencesToIds(stopWords: stopWords, tokenizer: tokenizer)
         let repetitionPenalty = chatRequest.repetitionPenalty ?? GenerationDefaults.repetitionPenalty
         let repetitionContextSize = chatRequest.repetitionContextSize ?? GenerationDefaults.repetitionContextSize
+        
+        let kvBits = chatRequest.kvBits
+        let kvGroupSize = chatRequest.kvGroupSize ?? GenerationDefaults.kvGroupSize
+        let quantizedKVStart = chatRequest.quantizedKVStart ?? GenerationDefaults.quantizedKVStart
+        
+        try KVCacheValidation.validate(
+            bits: kvBits,
+            groupSize: kvGroupSize,
+            quantizationStart: quantizedKVStart
+        )
 
         try await _validateProcessor(modelContainer: modelContainer)
 
         let detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
 
         if streamResponse {
-            return try await handleStreamingChatResponse(
+            let generationContext = ChatGenerationContext(
                 modelContainer: modelContainer,
                 tokenizer: tokenizer,
                 eosTokenId: eosTokenId,
                 userInput: userInput,
-                loadedModelName: loadedModelName,
+                logger: logger,
+                promptCacheManager: isVLM ? nil : promptCacheManager
+            )
+            let generationParameters = ChatGenerationParameters(
                 maxTokens: maxTokens,
                 temperature: temperature,
                 topP: topP,
                 repetitionPenalty: repetitionPenalty,
                 repetitionContextSize: repetitionContextSize,
+                kvBits: kvBits,
+                kvGroupSize: kvGroupSize,
+                quantizedKVStart: quantizedKVStart
+            )
+            let responseContext = ChatResponseContext(
+                loadedModelName: loadedModelName,
                 stopIdSequences: stopIdSequences,
                 detokenizer: detokenizer,
-                estimatedPromptTokens: estimatedPromptTokens,
-                logger: logger 
+                estimatedPromptTokens: estimatedPromptTokens
+            )
+            return try await handleStreamingChatResponse(
+                generationContext: generationContext,
+                generationParameters: generationParameters,
+                responseContext: responseContext
             )
         } else {
-             return try await handleNonStreamingChatResponse(
-                req: req,
+            let generationContext = ChatGenerationContext(
                 modelContainer: modelContainer,
                 tokenizer: tokenizer,
                 eosTokenId: eosTokenId,
                 userInput: userInput,
-                loadedModelName: loadedModelName,
+                logger: logger,
+                promptCacheManager: isVLM ? nil : promptCacheManager
+            )
+            let generationParameters = ChatGenerationParameters(
                 maxTokens: maxTokens,
                 temperature: temperature,
                 topP: topP,
                 repetitionPenalty: repetitionPenalty,
                 repetitionContextSize: repetitionContextSize,
+                kvBits: kvBits,
+                kvGroupSize: kvGroupSize,
+                quantizedKVStart: quantizedKVStart
+            )
+            let responseContext = ChatResponseContext(
+                loadedModelName: loadedModelName,
                 stopIdSequences: stopIdSequences,
-                estimatedPromptTokens: estimatedPromptTokens,
-                logger: logger 
+                detokenizer: detokenizer,
+                estimatedPromptTokens: estimatedPromptTokens
+            )
+            return try await handleNonStreamingChatResponse(
+                req: req,
+                generationContext: generationContext,
+                generationParameters: generationParameters,
+                responseContext: responseContext
             )
         }
     }
 }
 
-// MARK: - Response Handlers
-
 private func handleStreamingChatResponse(
-    // chatManager: ChatCompletionManager, // Removed
-    modelContainer: ModelContainer,
-    tokenizer: Tokenizer,
-    eosTokenId: Int,
-    userInput: UserInput,
-    loadedModelName: String,
-    maxTokens: Int,
-    temperature: Float,
-    topP: Float,
-    repetitionPenalty: Float,
-    repetitionContextSize: Int,
-    stopIdSequences: [[Int]],
-    detokenizer: NaiveStreamingDetokenizer,
-    estimatedPromptTokens: Int,
-    logger: Logger // Kept for logging and passing to _generateChatTokenStream
+    generationContext: ChatGenerationContext,
+    generationParameters: ChatGenerationParameters,
+    responseContext: ChatResponseContext
 ) async throws -> Response {
-    let headers =  HTTPHeaders([
+    let headers = HTTPHeaders([
         ("Content-Type", "text/event-stream"),
         ("Cache-Control", "no-cache"),
-        ("Connection", "keep-alive"),
+        ("Connection", "keep-alive")
     ])
     let response = Response(status: .ok, headers: headers)
     response.body = .init(stream: { writer in
         let chatId = "chatcmpl-\(UUID().uuidString)"
         let created = Int(Date().timeIntervalSince1970)
         let systemFingerprint: String? = nil
-        var streamDetokenizer = detokenizer
+        var streamDetokenizer = responseContext.detokenizer
 
         Task {
             var generatedTokens: [Int] = []
-            generatedTokens.reserveCapacity(maxTokens)
-            var finalFinishReason: String? = nil
+            generatedTokens.reserveCapacity(generationParameters.maxTokens)
+            var finalFinishReason: String?
 
             do {
-                logger.info("Starting CHAT stream generation (ID: \(chatId)) for model \(loadedModelName)")
+                generationContext.logger.info("Starting CHAT stream generation (ID: \(chatId)) for model \(responseContext.loadedModelName)")
 
                 let initialDelta = ChatCompletionDelta(role: "assistant", content: "")
                 let initialChoice = ChatCompletionChoiceDelta(index: 0, delta: initialDelta, finishReason: nil)
-                let initialChunk = ChatCompletionChunkResponse(id: chatId, created: created, model: loadedModelName, systemFingerprint: systemFingerprint, choices: [initialChoice])
-                if let initialSse = encodeSSE(response: initialChunk, logger: logger) {
-                    try await writer.write(.buffer(.init(string: initialSse)))
+                let initialChunk = ChatCompletionChunkResponse(id: chatId, created: created, model: responseContext.loadedModelName, systemFingerprint: systemFingerprint, choices: [initialChoice])
+                if let initialSse = encodeSSE(response: initialChunk, logger: generationContext.logger) {
+                    _ = try writer.write(.buffer(.init(string: initialSse)))
                 }
 
-                let tokenStream = try await _generateChatTokenStream( // Use standalone function
-                    modelContainer: modelContainer,
-                    tokenizer: tokenizer,
-                    eosTokenId: eosTokenId,
-                    userInput: userInput,
-                    maxTokens: maxTokens,
-                    temperature: temperature,
-                    topP: topP,
-                    repetitionPenalty: repetitionPenalty,
-                    repetitionContextSize: repetitionContextSize,
-                    logger: logger // Pass logger
+                let tokenStream = try await _generateChatTokenStream(
+                    context: generationContext,
+                    parameters: generationParameters
                 )
 
                 for try await token in tokenStream {
                     generatedTokens.append(token)
                     streamDetokenizer.append(token: token)
-                    let stopCondition = checkStoppingCriteria(tokens: generatedTokens, stopIdSequences: stopIdSequences, eosTokenId: eosTokenId)
+                    let stopCondition = checkStoppingCriteria(tokens: generatedTokens, stopIdSequences: responseContext.stopIdSequences, eosTokenId: generationContext.eosTokenId)
 
                     if stopCondition.stopMet {
                         finalFinishReason = "stop"
@@ -312,37 +409,36 @@ private func handleStreamingChatResponse(
                         let delta = ChatCompletionDelta(role: nil, content: newTextChunk)
                         let choice = ChatCompletionChoiceDelta(index: 0, delta: delta, finishReason: nil)
                         let chunkResponse = ChatCompletionChunkResponse(
-                            id: chatId, created: created, model: loadedModelName,
+                            id: chatId, created: created, model: responseContext.loadedModelName,
                             systemFingerprint: systemFingerprint, choices: [choice]
                         )
-                        if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
-                            try await writer.write(.buffer(.init(string: sseString)))
+                        if let sseString = encodeSSE(response: chunkResponse, logger: generationContext.logger) {
+                            _ = try writer.write(.buffer(.init(string: sseString)))
                         }
                     }
                 }
 
                 if finalFinishReason == nil {
-                    finalFinishReason = (generatedTokens.count >= maxTokens) ? "length" : "stop"
+                    finalFinishReason = (generatedTokens.count >= generationParameters.maxTokens) ? "length" : "stop"
                 }
 
                 let finalDelta = ChatCompletionDelta(role: nil, content: nil)
                 let finalChoice = ChatCompletionChoiceDelta(index: 0, delta: finalDelta, finishReason: finalFinishReason)
                 let finalChunk = ChatCompletionChunkResponse(
-                    id: chatId, created: created, model: loadedModelName,
+                    id: chatId, created: created, model: responseContext.loadedModelName,
                     systemFingerprint: systemFingerprint, choices: [finalChoice]
                  )
-                if let finalSseString = encodeSSE(response: finalChunk, logger: logger) {
-                    await writer.write(.buffer(.init(string: finalSseString)))
+                if let finalSseString = encodeSSE(response: finalChunk, logger: generationContext.logger) {
+                    _ = try writer.write(.buffer(.init(string: finalSseString)))
                 }
-
             } catch {
-                logger.error("Chat stream error (ID: \(chatId)): \(error)")
-                finalFinishReason = "error" // You might want to send an error event in SSE
+                generationContext.logger.error("Chat stream error (ID: \(chatId)): \(error)")
+                finalFinishReason = "error"
             }
 
-            await writer.write(.buffer(.init(string: AppConstants.sseDoneMessage)))
-            logger.info("CHAT Streaming response finished sending (ID: \(chatId)). Final Reason: \(finalFinishReason ?? "unknown")")
-            await writer.write(.end)
+            _ = writer.write(.buffer(.init(string: AppConstants.sseDoneMessage)))
+            generationContext.logger.info("CHAT Streaming response finished sending (ID: \(chatId)). Final Reason: \(finalFinishReason ?? "unknown")")
+            _ = writer.write(.end)
         }
     })
     return response
@@ -350,45 +446,26 @@ private func handleStreamingChatResponse(
 
 private func handleNonStreamingChatResponse(
     req: Request,
-    // chatManager: ChatCompletionManager, // Removed
-    modelContainer: ModelContainer,
-    tokenizer: Tokenizer,
-    eosTokenId: Int,
-    userInput: UserInput,
-    loadedModelName: String,
-    maxTokens: Int,
-    temperature: Float,
-    topP: Float,
-    repetitionPenalty: Float,
-    repetitionContextSize: Int,
-    stopIdSequences: [[Int]],
-    estimatedPromptTokens: Int,
-    logger: Logger // Kept for logging and passing to _generateChatTokenStream
+    generationContext: ChatGenerationContext,
+    generationParameters: ChatGenerationParameters,
+    responseContext: ChatResponseContext
 ) async throws -> Response {
     var generatedTokens: [Int] = []
-    generatedTokens.reserveCapacity(maxTokens)
+    generatedTokens.reserveCapacity(generationParameters.maxTokens)
     var finalFinishReason = "stop"
     let responseId = "chatcmpl-\(UUID().uuidString)"
     let created = Int(Date().timeIntervalSince1970)
 
     do {
-        logger.info("Starting non-streaming CHAT generation (ID: \(responseId)) for model \(loadedModelName)")
-        let tokenStream = try await _generateChatTokenStream( // Use standalone function
-            modelContainer: modelContainer,
-            tokenizer: tokenizer,
-            eosTokenId: eosTokenId,
-            userInput: userInput,
-            maxTokens: maxTokens,
-            temperature: temperature,
-            topP: topP,
-            repetitionPenalty: repetitionPenalty,
-            repetitionContextSize: repetitionContextSize,
-            logger: logger // Pass logger
+        generationContext.logger.info("Starting non-streaming CHAT generation (ID: \(responseId)) for model \(responseContext.loadedModelName)")
+        let tokenStream = try await _generateChatTokenStream(
+            context: generationContext,
+            parameters: generationParameters
         )
 
         for try await token in tokenStream {
             generatedTokens.append(token)
-            let stopCondition = checkStoppingCriteria(tokens: generatedTokens, stopIdSequences: stopIdSequences, eosTokenId: eosTokenId)
+            let stopCondition = checkStoppingCriteria(tokens: generatedTokens, stopIdSequences: responseContext.stopIdSequences, eosTokenId: generationContext.eosTokenId)
 
             if stopCondition.stopMet {
                 if stopCondition.trimLength > 0 && generatedTokens.count >= stopCondition.trimLength {
@@ -399,28 +476,29 @@ private func handleNonStreamingChatResponse(
             }
         }
 
-        if finalFinishReason != "stop" { // If loop finished without hitting a stop condition (e.g. maxTokens)
-            finalFinishReason = (generatedTokens.count >= maxTokens) ? "length" : "stop"
+        if finalFinishReason != "stop" {
+            finalFinishReason = (generatedTokens.count >= generationParameters.maxTokens) ? "length" : "stop"
         }
     } catch {
-        logger.error("Non-streaming chat generation error (ID: \(responseId)): \(error)")
-        throw Abort(.internalServerError, reason: "Failed to generate chat completion: \(error.localizedDescription)")
+        generationContext.logger.error("Non-streaming chat generation error (ID: \(responseId)): \(error)")
+        throw ProcessingError(status: .internalServerError, reason: "Failed to generate chat completion", underlyingError: error)
     }
 
-    let completionText = _decodeTokens(generatedTokens, tokenizer: tokenizer) // Use standalone function
+    let completionText = decodeTokens(generatedTokens, tokenizer: generationContext.tokenizer)
+    
     let assistantMessage = ChatMessageResponseData(role: "assistant", content: completionText)
     let chatChoice = ChatCompletionChoice(index: 0, message: assistantMessage, finishReason: finalFinishReason)
     let usage = CompletionUsage(
-        promptTokens: estimatedPromptTokens,
+        promptTokens: responseContext.estimatedPromptTokens,
         completionTokens: generatedTokens.count,
-        totalTokens: estimatedPromptTokens + generatedTokens.count
+        totalTokens: responseContext.estimatedPromptTokens + generatedTokens.count
     )
 
     let chatResponse = ChatCompletionResponse(
-        id: responseId, created: created, model: loadedModelName,
+        id: responseId, created: created, model: responseContext.loadedModelName,
         choices: [chatChoice], usage: usage
     )
 
-    logger.info("Non-streaming CHAT response generated (ID: \(responseId)). Reason: \(finalFinishReason)")
+    generationContext.logger.info("Non-streaming CHAT response generated (ID: \(responseId)). Reason: \(finalFinishReason)")
     return try await chatResponse.encodeResponse(for: req)
 }

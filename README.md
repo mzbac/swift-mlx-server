@@ -31,7 +31,10 @@ The server provides three main endpoints:
   "stream": false,
   "stop": ["###", "END"],
   "repetition_penalty": 1.1,
-  "repetition_context_size": 20
+  "repetition_context_size": 20,
+  "kv_bits": 8,
+  "kv_group_size": 64,
+  "kv_quantization_start": 1000
 }
 ```
 
@@ -75,7 +78,9 @@ For text-only models:
   "stream": false,
   "stop": ["###", "END"],
   "repetition_penalty": 1.1,
-  "repetition_context_size": 20
+  "repetition_context_size": 20,
+  "kv_bits": 4,
+  "kv_quantization_start": 500
 }
 ```
 
@@ -201,6 +206,27 @@ The endpoints accept the following parameters:
 - `repetition_penalty` (Optional, Completions & Chat): Applies a penalty to repeated tokens to reduce repetition. Defaults to 1.0.
 
 - `repetition_context_size` (Optional, Completions & Chat): The size of the context window for applying repetition penalty. Defaults to 20.
+
+### KV Cache Quantization Parameters (Completions & Chat)
+
+These parameters enable memory-efficient generation for long contexts by quantizing the key-value cache:
+
+- `kv_bits` (Optional): Number of bits for KV cache quantization. Supported values are 4 or 8. When not specified, no quantization is applied. 4-bit quantization saves ~75% memory, 8-bit saves ~50%.
+
+- `kv_group_size` (Optional): Group size for quantization. Must be positive and divisible by 8. Defaults to 64.
+
+- `kv_quantization_start` (Optional): Number of tokens after which to start quantizing the KV cache. Defaults to 5000. Set to 0 to quantize from the beginning.
+
+Example usage for long-context generation:
+```json
+{
+  "prompt": "Long text here...",
+  "max_tokens": 2000,
+  "kv_bits": 4,
+  "kv_group_size": 64,
+  "kv_quantization_start": 1000
+}
+```
 
 ### Embeddings Parameters
 

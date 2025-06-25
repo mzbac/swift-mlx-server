@@ -14,6 +14,9 @@ struct CompletionRequest: Content {
     let stop: [String]?
     let repetitionPenalty: Float?
     let repetitionContextSize: Int?
+    let kvBits: Int?
+    let kvGroupSize: Int?
+    let quantizedKVStart: Int?
 
     enum CodingKeys: String, CodingKey {
         case model, prompt, temperature, n, stream, logprobs, stop
@@ -21,6 +24,9 @@ struct CompletionRequest: Content {
         case topP = "top_p"
         case repetitionPenalty = "repetition_penalty"
         case repetitionContextSize = "repetition_context_size"
+        case kvBits = "kv_bits"
+        case kvGroupSize = "kv_group_size"
+        case quantizedKVStart = "quantized_kv_start"
     }
 }
 
@@ -102,6 +108,9 @@ struct ChatCompletionRequest: Content {
     let repetitionPenalty: Float?
     let repetitionContextSize: Int?
     let resize: [CGFloat]?
+    let kvBits: Int?
+    let kvGroupSize: Int?
+    let quantizedKVStart: Int?
 
     enum CodingKeys: String, CodingKey {
         case messages, model, temperature, stream, stop, resize
@@ -109,5 +118,8 @@ struct ChatCompletionRequest: Content {
         case topP = "top_p"
         case repetitionPenalty = "repetition_penalty"
         case repetitionContextSize = "repetition_context_size"
+        case kvBits = "kv_bits"
+        case kvGroupSize = "kv_group_size"
+        case quantizedKVStart = "quantized_kv_start"
     }
 }

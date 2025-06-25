@@ -97,7 +97,6 @@ struct CompletionChunkResponse: Content {
     }
 }
 
-
 struct ChatMessageResponseData: Content {
     let role: String
     let content: String?
@@ -114,8 +113,8 @@ struct ChatMessageResponseData: Content {
 }
 
 struct ChatCompletionDelta: Content {
-    var role: String? = nil
-    var content: String? = nil
+    var role: String?
+    var content: String?
 }
 
 struct ChatCompletionChoiceDelta: Content {

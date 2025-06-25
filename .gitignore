@@ -98,3 +98,9 @@ fastlane/test_output
 iOSInjectionProject/
 
 .vscode/
+.claude/settings.local.json
+CLAUDE.md
+
+temp/*
+
+dist

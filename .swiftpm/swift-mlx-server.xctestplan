@@ -20,7 +20,13 @@
     }
   },
   "testTargets" : [
-
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "swift-mlx-serverTests",
+        "name" : "swift-mlx-serverTests"
+      }
+    }
   ],
   "version" : 1
 }

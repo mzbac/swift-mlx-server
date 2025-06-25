@@ -95,14 +95,13 @@ struct EmbeddingResponse: Content {
     let usage: UsageData
 }
 
-
 func registerEmbeddingsRoute(_ app: Application, embeddingModelProvider: EmbeddingModelProvider) {
-
     app.post("v1", "embeddings") { req async throws -> EmbeddingResponse in
         let embeddingRequest = try req.content.decode(EmbeddingRequest.self)
         let logger = req.logger
+        let embeddingReqId = "emb-\(UUID().uuidString)"
 
-        logger.info("Received embedding request for model: \(embeddingRequest.model ?? "Default")")
+        logger.info("Received embedding request (ID: \(embeddingReqId)) for model: \(embeddingRequest.model ?? "Default")")
 
         let (modelContainer, loadedModelName) = try await embeddingModelProvider.getModel(
             requestedModelId: embeddingRequest.model
@@ -110,16 +109,16 @@ func registerEmbeddingsRoute(_ app: Application, embeddingModelProvider: Embeddi
 
         let texts = embeddingRequest.input.values
         guard !texts.isEmpty, texts.allSatisfy({ !$0.isEmpty }) else {
-            logger.error("Embedding request input is empty or contains empty strings.")
+            logger.error("Embedding request (ID: \(embeddingReqId)) input is empty or contains empty strings.")
             throw Abort(.badRequest, reason: "Input text(s) cannot be empty.")
         }
 
         let encodingFormat = embeddingRequest.encoding_format ?? "float"
         let batchSize = embeddingRequest.batch_size ?? texts.count
 
-        logger.debug("Processing \(texts.count) text(s) for embedding with model \(loadedModelName). Batch size: \(batchSize), Format: \(encodingFormat)")
+        logger.debug("Processing \(texts.count) text(s) for embedding (ID: \(embeddingReqId)) with model \(loadedModelName). Batch size: \(batchSize), Format: \(encodingFormat)")
 
-        return try await modelContainer.perform { model, tokenizer in
+        return await modelContainer.perform { model, tokenizer in
             var allData: [EmbeddingData] = []
             var promptTokens = 0
             var index = 0
@@ -127,23 +126,16 @@ func registerEmbeddingsRoute(_ app: Application, embeddingModelProvider: Embeddi
             for batchStart in stride(from: 0, to: texts.count, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, texts.count)
                 let batchTexts = Array(texts[batchStart..<batchEnd])
-                logger.trace("Processing batch \(batchStart/batchSize + 1), indices \(batchStart)..<\(batchEnd)")
+                logger.trace("Processing batch \(batchStart / batchSize + 1) for \(embeddingReqId), indices \(batchStart)..<\(batchEnd)")
 
                 let tokenized = batchTexts.map { tokenizer.encode(text: $0, addSpecialTokens: true) }
                 let currentBatchTokens = tokenized.reduce(0) { $0 + $1.count }
                 promptTokens += currentBatchTokens
-                logger.trace("Batch tokens: \(currentBatchTokens)")
+                logger.trace("Batch tokens for \(embeddingReqId): \(currentBatchTokens)")
 
                 let maxLength = tokenized.map { $0.count }.max() ?? 16
                 let padId = tokenizer.eosTokenId ?? 0
-                guard let padIdInt = padId as? Int else {
-                     logger.error("Could not determine valid integer padding token ID.")
-                     struct EmbeddingError: Error, AbortError {
-                         var status: HTTPResponseStatus { .internalServerError }
-                         var reason: String { "Failed to get padding token ID" }
-                     }
-                     throw EmbeddingError()
-                }
+                let padIdInt = padId
 
                 let paddedArrays = tokenized.map { elem in
                      MLXArray(elem + Array(repeating: padIdInt, count: maxLength - elem.count))
@@ -151,21 +143,13 @@ func registerEmbeddingsRoute(_ app: Application, embeddingModelProvider: Embeddi
 
                 guard !paddedArrays.isEmpty else { continue }
 
-                let padded = try MLX.stacked(paddedArrays)
+                let padded = MLX.stacked(paddedArrays)
                 let attentionMask = padded .!= MLXArray(padIdInt)
                 let tokenTypeIds = MLXArray.zeros(like: padded) 
 
-                let output = try  model(
+                let output = model(
                     padded, positionIds: nil, tokenTypeIds: tokenTypeIds, attentionMask: attentionMask) 
-                guard let embeddings = output.textEmbeds as? MLXArray else {
-                     logger.error("Could not extract embeddings from model output for batch.")
-                     struct EmbeddingError: Error, AbortError {
-                         var status: HTTPResponseStatus { .internalServerError }
-                         var reason: String { "Failed to get embeddings from model output." }
-                     }
-                     throw EmbeddingError()
-                }
-
+                let embeddings = output.textEmbeds
 
                 switch encodingFormat {
                 case "base64":
@@ -183,13 +167,12 @@ func registerEmbeddingsRoute(_ app: Application, embeddingModelProvider: Embeddi
                         index += 1
                     }
                 }
-                logger.trace("Finished processing batch \(batchStart/batchSize + 1). Total embeddings so far: \(index)")
+                logger.trace("Finished processing batch \(batchStart / batchSize + 1) for \(embeddingReqId). Total embeddings so far: \(index)")
             }
             let usage = UsageData(prompt_tokens: promptTokens, total_tokens: promptTokens)
-            logger.info("Embedding generation complete for model \(loadedModelName). Total tokens: \(promptTokens)")
+            logger.info("Embedding generation complete (ID: \(embeddingReqId)) for model \(loadedModelName). Total tokens: \(promptTokens)")
 
             return EmbeddingResponse(data: allData, model: loadedModelName, usage: usage)
-
         } 
     } 
-} 
+}
