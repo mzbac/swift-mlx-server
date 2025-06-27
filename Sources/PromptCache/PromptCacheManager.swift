@@ -38,7 +38,6 @@ public actor PromptCacheManager {
         guard var entry = caches[cacheKey], entry.isValid(ttlMinutes: ttlMinutes) else {
             stats.misses += 1
             stats.totalTokensProcessed += tokens.count
-            logger.debug("Cache miss for key: \(cacheKey)")
             return (tokens, nil)
         }
         
@@ -47,7 +46,6 @@ public actor PromptCacheManager {
         guard commonLength > 0 else {
             stats.misses += 1
             stats.totalTokensProcessed += tokens.count
-            logger.debug("No common prefix found for key: \(cacheKey)")
             caches.removeValue(forKey: cacheKey)
             currentSizeBytes -= entry.estimatedSizeBytes
             return (tokens, nil)
@@ -61,11 +59,24 @@ public actor PromptCacheManager {
         
         let tokensToTrim = entry.tokens.count - commonLength
         if tokensToTrim > 0 {
-            logger.debug("Trimming \(tokensToTrim) tokens from cache")
-            for cache in entry.kvCaches {
-                cache.trim(count: tokensToTrim)
+            let allTrimmable = entry.kvCaches.allSatisfy { $0.isTrimmable }
+            
+            if allTrimmable {
+                let targetOffset = commonLength
+                
+                let currentOffset = entry.kvCaches.first?.offset ?? 0
+                let cacheTrimAmount = currentOffset - targetOffset
+                
+                for cache in entry.kvCaches {
+                    cache.trim(cacheTrimAmount)
+                }
+                
+                entry.tokens.removeLast(tokensToTrim)
+            } else {
+                caches.removeValue(forKey: cacheKey)
+                currentSizeBytes -= entry.estimatedSizeBytes
+                return (tokens, nil)
             }
-            entry.tokens.removeLast(tokensToTrim)
             
             let oldSize = entry.estimatedSizeBytes
             entry.estimatedSizeBytes = PromptCacheEntry.estimateSize(
@@ -77,8 +88,8 @@ public actor PromptCacheManager {
         
         caches[cacheKey] = entry
         
-        let kvCaches = entry.kvCaches.map { $0 as KVCache }
-        
+        let kvCaches = entry.kvCaches
+               
         logger.info("Cache hit: Reusing \(commonLength) tokens, processing \(tokens.count - commonLength) new tokens")
         
         return (Array(tokens[commonLength...]), kvCaches)
@@ -100,12 +111,20 @@ public actor PromptCacheManager {
             kvGroupSize: parameters.kvGroupSize
         )
         
-        let trimmableCaches = await createTrimmableCaches(from: kvCaches, parameters: parameters, model: model)
-        
+        // Quantize caches if needed based on parameters
+        let finalCaches = quantizeCachesIfNeeded(
+            kvCaches,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize,
+            quantizedKVStart: parameters.quantizedKVStart
+        )
+
         let entry = PromptCacheEntry(
             key: cacheKey,
             tokens: tokens,
-            kvCaches: trimmableCaches
+            kvCaches: finalCaches,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize
         )
         
         let maxSizeBytes = maxSizeMB * 1_024 * 1_024
@@ -121,7 +140,6 @@ public actor PromptCacheManager {
                     currentSizeBytes -= removedEntry.estimatedSizeBytes
                     sizeAfterAdding -= removedEntry.estimatedSizeBytes
                     stats.evictions += 1
-                    logger.debug("Evicted cache entry: \(lruKey)")
                 }
             } else {
                 break
@@ -130,8 +148,6 @@ public actor PromptCacheManager {
         
         caches[cacheKey] = entry
         currentSizeBytes = sizeAfterAdding
-        
-        logger.debug("Updated cache for key: \(cacheKey), size: \(entry.estimatedSizeBytes) bytes")
     }
     
     /// Get current cache statistics
@@ -153,6 +169,36 @@ public actor PromptCacheManager {
             sizeBytes: currentSizeBytes,
             sizeMB: Double(currentSizeBytes) / (1_024 * 1_024)
         )
+    }
+    
+    private func quantizeCachesIfNeeded(
+        _ caches: [KVCache],
+        kvBits: Int?,
+        kvGroupSize: Int,
+        quantizedKVStart: Int
+    ) -> [KVCache] {
+        // If no quantization requested, return as-is
+        guard let kvBits = kvBits else { return caches }
+        
+        var quantizedCount = 0
+        // Convert KVCacheSimple to QuantizedKVCache if conditions are met
+        let result: [KVCache] = caches.map { cache in
+            if let simpleCache = cache as? KVCacheSimple,
+               cache.offset > quantizedKVStart {
+                // Convert to quantized cache
+                quantizedCount += 1
+                return simpleCache.toQuantized(groupSize: kvGroupSize, bits: kvBits) as KVCache
+            } else {
+                // Keep other cache types or caches that haven't reached quantization start
+                return cache
+            }
+        }
+        
+        if quantizedCount > 0 {
+            logger.info("Quantized \(quantizedCount) KV caches with \(kvBits) bits, group size \(kvGroupSize)")
+        }
+        
+        return result
     }
     
     private func createCacheKey(
@@ -189,9 +235,6 @@ public actor PromptCacheManager {
         
         currentSizeBytes -= removedSize
         
-        if !keysToRemove.isEmpty {
-            logger.debug("Cleaned \(keysToRemove.count) expired cache entries")
-        }
     }
     
     private func findLeastRecentlyUsedKey() -> String? {
@@ -206,40 +249,6 @@ public actor PromptCacheManager {
         return oldestKey
     }
     
-    private func createTrimmableCaches(
-        from kvCaches: [KVCache],
-        parameters: GenerateParameters,
-        model: any LanguageModel
-    ) async -> [TrimmableKVCache] {
-        var trimmableCaches: [TrimmableKVCache] = []
-        
-        for (index, cache) in kvCaches.enumerated() {
-            if let trimmable = cache as? TrimmableKVCache {
-                trimmableCaches.append(trimmable)
-                continue
-            }
-            
-            if cache is QuantizedKVCacheProtocol,
-               let kvBits = parameters.kvBits {
-                let wrapper = CachedQuantizedKVCache(
-                    groupSize: parameters.kvGroupSize,
-                    bits: kvBits
-                )
-                let evaluatable = cache as any Evaluatable
-                _ = evaluatable.innerState()
-                logger.debug("Wrapped quantized cache at index \(index)")
-                trimmableCaches.append(wrapper)
-            } else {
-                let wrapper = CachedKVCacheSimple()
-                let evaluatable = cache as any Evaluatable
-                _ = evaluatable.innerState()
-                logger.debug("Wrapped simple cache at index \(index)")
-                trimmableCaches.append(wrapper)
-            }
-        }
-        
-        return trimmableCaches
-    }
 }
 
 public extension PromptCacheManager {

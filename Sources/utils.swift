@@ -1,7 +1,7 @@
-import Vapor
 import Foundation
 import Logging
 import Tokenizers
+import Vapor
 
 enum AppConstants {
     static let defaultHost = "127.0.0.1"
@@ -19,24 +19,28 @@ enum GenerationDefaults {
     static let repetitionPenalty: Float = 1.0
     static let repetitionContextSize = 20
     static let stopSequences: [String] = []
-    
+
     static let kvGroupSize: Int = 64
-    static let quantizedKVStart: Int = 5_000
+    static let quantizedKVStart: Int = 0
 }
 
 protocol MLXServerError: AbortError {
     var modelId: String? { get }
     var underlyingError: Error? { get }
     var baseReason: String { get }
-    
+
     init(status: HTTPResponseStatus, reason: String, modelId: String?, underlyingError: Error?)
 }
 
 extension MLXServerError {
-    init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
-        self.init(status: status, reason: reason, modelId: modelId, underlyingError: underlyingError)
+    init(
+        status: HTTPResponseStatus, reason: String, modelId: String? = nil,
+        underlyingError: Error? = nil
+    ) {
+        self.init(
+            status: status, reason: reason, modelId: modelId, underlyingError: underlyingError)
     }
-    
+
     var reason: String {
         var fullReason = self.baseReason
         if let modelId = modelId, !modelId.isEmpty {
@@ -55,8 +59,11 @@ struct ModelProviderError: MLXServerError {
     let identifier: String?
     let modelId: String?
     let underlyingError: Error?
-    
-    init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
+
+    init(
+        status: HTTPResponseStatus, reason: String, modelId: String? = nil,
+        underlyingError: Error? = nil
+    ) {
         self.status = status
         self.baseReason = reason
         self.identifier = modelId
@@ -71,8 +78,11 @@ struct ProcessingError: MLXServerError {
     let identifier: String?
     let modelId: String?
     let underlyingError: Error?
-    
-    init(status: HTTPResponseStatus, reason: String, modelId: String? = nil, underlyingError: Error? = nil) {
+
+    init(
+        status: HTTPResponseStatus, reason: String, modelId: String? = nil,
+        underlyingError: Error? = nil
+    ) {
         self.status = status
         self.baseReason = reason
         self.identifier = modelId
@@ -86,22 +96,24 @@ struct StopCondition {
     let trimLength: Int
 }
 
-func checkStoppingCriteria(tokens: [Int], stopIdSequences: [[Int]], eosTokenId: Int) -> StopCondition {
-    guard let lastToken = tokens.last else { 
-        return StopCondition(stopMet: false, trimLength: 0) 
+func checkStoppingCriteria(tokens: [Int], stopIdSequences: [[Int]], eosTokenId: Int)
+    -> StopCondition
+{
+    guard let lastToken = tokens.last else {
+        return StopCondition(stopMet: false, trimLength: 0)
     }
-    
-    if lastToken == eosTokenId { 
-        return StopCondition(stopMet: true, trimLength: 1) 
+
+    if lastToken == eosTokenId {
+        return StopCondition(stopMet: true, trimLength: 1)
     }
-    
+
     for stopIds in stopIdSequences {
         guard !stopIds.isEmpty else { continue }
         if tokens.count >= stopIds.count, tokens.suffix(stopIds.count) == stopIds {
             return StopCondition(stopMet: true, trimLength: stopIds.count)
         }
     }
-    
+
     return StopCondition(stopMet: false, trimLength: 0)
 }
 
@@ -121,12 +133,12 @@ func encodeSSE<T: Encodable>(response: T, logger: Logger) -> String? {
         encoder.outputFormatting = .sortedKeys
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let jsonData = try encoder.encode(response)
-        
+
         guard let jsonString = String(data: jsonData, encoding: .utf8) else {
             logger.error("Failed to encode SSE response to UTF-8")
             return nil
         }
-        
+
         return AppConstants.sseEventHeader + jsonString + AppConstants.sseEventSeparator
     } catch {
         logger.error("Failed to encode SSE response: \(error)")
@@ -144,25 +156,26 @@ enum KVCacheValidation {
                 )
             }
         }
-        
+
         guard groupSize > 0 && groupSize.isMultiple(of: 8) else {
             throw ProcessingError(
                 status: .badRequest,
                 reason: "kv_group_size must be positive and divisible by 8, got \(groupSize)"
             )
         }
-        
         guard quantizationStart >= 0 else {
             throw ProcessingError(
                 status: .badRequest,
-                reason: "kv_quantization_start must be non-negative, got \(quantizationStart)"
+                reason: "quantized_kv_start must be non-negative, got \(quantizationStart)"
             )
+
         }
+
     }
 }
 
-extension Array { 
-    func nilIfEmpty() -> Self? { 
-        return isEmpty ? nil : self 
-    } 
+extension Array {
+    func nilIfEmpty() -> Self? {
+        return isEmpty ? nil : self
+    }
 }

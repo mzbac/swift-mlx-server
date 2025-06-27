@@ -9,13 +9,13 @@ import Vapor
 private final class AtomicCounter {
     private let lock = NSLock()
     private var _value = 0
-    
+
     var value: Int {
         lock.lock()
         defer { lock.unlock() }
         return _value
     }
-    
+
     func increment() {
         lock.lock()
         defer { lock.unlock() }
@@ -23,35 +23,41 @@ private final class AtomicCounter {
     }
 }
 
-func registerTextCompletionsRoute(_ app: Application, modelProvider: ModelProvider, promptCacheManager: PromptCacheManager? = nil) throws {
+func registerTextCompletionsRoute(
+    _ app: Application, modelProvider: ModelProvider, promptCacheManager: PromptCacheManager? = nil
+) throws {
     app.post("v1", "completions") { req async throws -> Response in
         let completionRequest = try req.content.decode(CompletionRequest.self)
         let logger = req.logger
         let reqModelName = completionRequest.model
         let baseCompletionId = "cmpl-\(UUID().uuidString)"
 
-        let (modelContainer, tokenizer, loadedModelName) = try await modelProvider.getModel(requestedModelId: reqModelName)
-        
+        let (modelContainer, tokenizer, loadedModelName) = try await modelProvider.getModel(
+            requestedModelId: reqModelName)
+
         guard let eosTokenId = tokenizer.eosTokenId else {
             throw ProcessingError(
-                status: .internalServerError, 
-                reason: "Tokenizer EOS token ID missing", 
+                status: .internalServerError,
+                reason: "Tokenizer EOS token ID missing",
                 modelId: loadedModelName
             )
         }
-        
+
         let promptTokens = tokenizer.encode(text: completionRequest.prompt)
-        logger.info("Received TEXT completion request (ID: \(baseCompletionId)) for model '\(reqModelName ?? "default")', prompt tokens: \(promptTokens.count)")
+        logger.info(
+            "Received TEXT completion request (ID: \(baseCompletionId)) for model '\(reqModelName ?? "default")', prompt tokens: \(promptTokens.count)"
+        )
 
         let parameters = TextCompletionParameters(from: completionRequest)
-        
+
         try KVCacheValidation.validate(
             bits: parameters.kvBits,
             groupSize: parameters.kvGroupSize,
             quantizationStart: parameters.quantizedKVStart
         )
-        
-        let stopIdSequences = stopSequencesToIds(stopWords: parameters.stopWords, tokenizer: tokenizer)
+
+        let stopIdSequences = stopSequencesToIds(
+            stopWords: parameters.stopWords, tokenizer: tokenizer)
 
         if parameters.streamResponse {
             return try await handleStreamingTextCompletion(
@@ -92,11 +98,11 @@ private struct TextCompletionParameters {
     let stopWords: [String]
     let repetitionPenalty: Float
     let repetitionContextSize: Int
-    
+
     let kvBits: Int?
     let kvGroupSize: Int
     let quantizedKVStart: Int
-    
+
     init(from request: CompletionRequest) {
         self.maxTokens = request.maxTokens ?? GenerationDefaults.maxTokens
         self.temperature = request.temperature ?? GenerationDefaults.temperature
@@ -104,8 +110,9 @@ private struct TextCompletionParameters {
         self.streamResponse = request.stream ?? GenerationDefaults.stream
         self.stopWords = request.stop ?? GenerationDefaults.stopSequences
         self.repetitionPenalty = request.repetitionPenalty ?? GenerationDefaults.repetitionPenalty
-        self.repetitionContextSize = request.repetitionContextSize ?? GenerationDefaults.repetitionContextSize
-        
+        self.repetitionContextSize =
+            request.repetitionContextSize ?? GenerationDefaults.repetitionContextSize
+
         self.kvBits = request.kvBits
         self.kvGroupSize = request.kvGroupSize ?? GenerationDefaults.kvGroupSize
         self.quantizedKVStart = request.quantizedKVStart ?? GenerationDefaults.quantizedKVStart
@@ -137,7 +144,7 @@ private func generateCompletionTokenStream(
                 _ = try await modelContainer.perform { context in
                     var tokensToProcess = promptTokens
                     var existingCache: [KVCache]?
-                    
+
                     if let cacheManager = promptCacheManager {
                         let modelKey = await modelContainer.configuration.name
                         let cacheResult = await cacheManager.getCachedState(
@@ -148,29 +155,32 @@ private func generateCompletionTokenStream(
                         )
                         tokensToProcess = cacheResult.tokensToProcess
                         existingCache = cacheResult.cache
-                        
+
                         if existingCache != nil {
-                            logger.info("Using cached prompt prefix, processing \(tokensToProcess.count) new tokens")
+                            logger.info(
+                                "Using cached prompt prefix, processing \(tokensToProcess.count) new tokens"
+                            )
                         }
                     }
-                    
+
                     let input = LMInput(tokens: MLXArray(tokensToProcess))
-                    
-                    let cache = existingCache ?? context.model.newCache(parameters: generateParameters)
-                    
+
+                    let cache =
+                        existingCache ?? context.model.newCache(parameters: generateParameters)
+
                     let iterator = try TokenIterator(
                         input: input,
                         model: context.model,
                         cache: cache,
                         parameters: generateParameters
                     )
-                    
+
                     var allGeneratedTokens: [Int] = []
-                    
+
                     for token in iterator {
                         if token == eosTokenId { break }
                         if tokenCount.value >= parameters.maxTokens { break }
-                        
+
                         if token == tokenizer.unknownTokenId {
                             logger.warning("Generated unknown token ID. Skipping.")
                         } else {
@@ -179,7 +189,7 @@ private func generateCompletionTokenStream(
                             allGeneratedTokens.append(token)
                         }
                     }
-                    
+
                     if let cacheManager = promptCacheManager {
                         let fullTokens = promptTokens + allGeneratedTokens
                         await cacheManager.updateCache(
@@ -191,7 +201,6 @@ private func generateCompletionTokenStream(
                         )
                     }
                 }
-                logger.debug("Completion generate function completed.")
                 continuation.finish()
             } catch {
                 logger.error("Completion token stream error: \(error)")
@@ -216,18 +225,20 @@ private func handleStreamingTextCompletion(
     let headers = HTTPHeaders([
         ("Content-Type", "text/event-stream"),
         ("Cache-Control", "no-cache"),
-        ("Connection", "keep-alive")
+        ("Connection", "keep-alive"),
     ])
-    
+
     let response = Response(status: .ok, headers: headers)
     response.body = .init(stream: { writer in
         Task {
             var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
             var generatedTokens: [Int] = []
             var finalFinishReason: String?
-            
+
             do {
-                logger.info("Starting TEXT stream generation (ID: \(baseCompletionId)) for model \(loadedModelName)")
+                logger.info(
+                    "Starting TEXT stream generation (ID: \(baseCompletionId)) for model \(loadedModelName)"
+                )
                 let tokenStream = try await generateCompletionTokenStream(
                     modelContainer: modelContainer,
                     tokenizer: tokenizer,
@@ -237,17 +248,17 @@ private func handleStreamingTextCompletion(
                     logger: logger,
                     promptCacheManager: promptCacheManager
                 )
-                
+
                 for try await token in tokenStream {
                     generatedTokens.append(token)
                     detokenizer.append(token: token)
-                    
+
                     let stopCondition = checkStoppingCriteria(
-                        tokens: generatedTokens, 
-                        stopIdSequences: stopIdSequences, 
+                        tokens: generatedTokens,
+                        stopIdSequences: stopIdSequences,
                         eosTokenId: eosTokenId
                     )
-                    
+
                     if stopCondition.stopMet {
                         finalFinishReason = "stop"
                         break
@@ -260,23 +271,24 @@ private func handleStreamingTextCompletion(
                             nextChunk: newTextChunk
                         )
                         if let sseString = encodeSSE(response: chunkResponse, logger: logger) {
-                            _ = try writer.write(.buffer(.init(string: sseString)))
+                           writer.write(.buffer(.init(string: sseString)))
                         }
                     }
                 }
-                
+
                 if finalFinishReason == nil {
-                    finalFinishReason = (generatedTokens.count >= parameters.maxTokens) ? "length" : "stop"
+                    finalFinishReason =
+                        (generatedTokens.count >= parameters.maxTokens) ? "length" : "stop"
                 }
             } catch {
                 logger.error("Text stream error (ID: \(baseCompletionId)): \(error)")
             }
-            
+
             _ = writer.write(.buffer(.init(string: AppConstants.sseDoneMessage)))
             _ = writer.write(.end)
         }
     })
-    
+
     return response
 }
 
@@ -295,9 +307,11 @@ private func handleNonStreamingTextCompletion(
 ) async throws -> Response {
     var generatedTokens: [Int] = []
     var finalFinishReason = "stop"
-    
+
     do {
-        logger.info("Starting non-streaming TEXT generation (ID: \(baseCompletionId)) for model \(loadedModelName).")
+        logger.info(
+            "Starting non-streaming TEXT generation (ID: \(baseCompletionId)) for model \(loadedModelName)."
+        )
         let tokenStream = try await generateCompletionTokenStream(
             modelContainer: modelContainer,
             tokenizer: tokenizer,
@@ -307,38 +321,39 @@ private func handleNonStreamingTextCompletion(
             logger: logger,
             promptCacheManager: promptCacheManager
         )
-        
+
         for try await token in tokenStream {
             generatedTokens.append(token)
             let stopCondition = checkStoppingCriteria(
-                tokens: generatedTokens, 
-                stopIdSequences: stopIdSequences, 
+                tokens: generatedTokens,
+                stopIdSequences: stopIdSequences,
                 eosTokenId: eosTokenId
             )
-            
+
             if stopCondition.stopMet {
-                if stopCondition.trimLength > 0 && generatedTokens.count >= stopCondition.trimLength {
+                if stopCondition.trimLength > 0 && generatedTokens.count >= stopCondition.trimLength
+                {
                     generatedTokens.removeLast(stopCondition.trimLength)
                 }
                 finalFinishReason = "stop"
                 break
             }
         }
-        
+
         if finalFinishReason != "stop" {
             finalFinishReason = (generatedTokens.count >= parameters.maxTokens) ? "length" : "stop"
         }
     } catch {
         logger.error("Non-streaming text generation error (ID: \(baseCompletionId)): \(error)")
         throw ProcessingError(
-            status: .internalServerError, 
-            reason: "Failed to generate completion", 
+            status: .internalServerError,
+            reason: "Failed to generate completion",
             underlyingError: error
         )
     }
-    
+
     let completionText = decodeTokens(generatedTokens, tokenizer: tokenizer)
-    
+
     let choice = CompletionChoice(text: completionText, finishReason: finalFinishReason)
     let usage = CompletionUsage(
         promptTokens: promptTokens.count,
@@ -351,6 +366,6 @@ private func handleNonStreamingTextCompletion(
         choices: [choice],
         usage: usage
     )
-    
+
     return try await completionResponse.encodeResponse(for: req)
 }

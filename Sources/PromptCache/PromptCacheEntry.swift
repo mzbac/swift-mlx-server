@@ -10,8 +10,14 @@ struct PromptCacheEntry {
     /// The tokens that have been processed and cached
     var tokens: [Int]
     
-    /// The KV cache objects (trimmable versions)
-    var kvCaches: [TrimmableKVCache]
+    /// The KV cache objects
+    var kvCaches: [KVCache]
+    
+    /// KV quantization bits (nil if not quantized)
+    let kvBits: Int?
+    
+    /// KV quantization group size
+    let kvGroupSize: Int
     
     /// When this cache entry was created
     let createdAt: Date
@@ -34,7 +40,7 @@ struct PromptCacheEntry {
     }
     
     /// Calculate the estimated size of this cache entry
-    static func estimateSize(tokens: [Int], kvCaches: [TrimmableKVCache]) -> Int {
+    static func estimateSize(tokens: [Int], kvCaches: [KVCache]) -> Int {
         var size = tokens.count * MemoryLayout<Int>.size
         
         for cache in kvCaches {
@@ -51,10 +57,12 @@ struct PromptCacheEntry {
     }
     
     /// Create a new cache entry
-    init(key: String, tokens: [Int], kvCaches: [TrimmableKVCache]) {
+    init(key: String, tokens: [Int], kvCaches: [KVCache], kvBits: Int? = nil, kvGroupSize: Int = 64) {
         self.key = key
         self.tokens = tokens
         self.kvCaches = kvCaches
+        self.kvBits = kvBits
+        self.kvGroupSize = kvGroupSize
         self.createdAt = Date()
         self.lastAccessedAt = Date()
         self.estimatedSizeBytes = Self.estimateSize(tokens: tokens, kvCaches: kvCaches)
