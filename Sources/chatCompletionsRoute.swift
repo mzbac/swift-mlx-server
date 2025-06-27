@@ -240,7 +240,7 @@ private func _generateChatTokenStream(
                         input: inputForGeneration,
                         model: modelContext.model,
                         cache: cache,
-                        parameters: iteratorParameters  // Use modified params
+                        parameters: iteratorParameters
                     )
 
                     var allGeneratedTokens: [Int] = []
@@ -264,7 +264,7 @@ private func _generateChatTokenStream(
                             modelKey: context.modelContainer.configuration.name,
                             tokens: fullTokens,
                             kvCaches: cache,
-                            parameters: originalGenerateParameters,  // Use original params
+                            parameters: originalGenerateParameters,
                             model: modelContext.model
                         )
                     }

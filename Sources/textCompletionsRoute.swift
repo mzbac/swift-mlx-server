@@ -141,6 +141,9 @@ private func generateCompletionTokenStream(
                     repetitionPenalty: parameters.repetitionPenalty,
                     repetitionContextSize: parameters.repetitionContextSize
                 )
+                
+                let originalGenerateParameters = generateParameters
+                
                 _ = try await modelContainer.perform { context in
                     var tokensToProcess = promptTokens
                     var existingCache: [KVCache]?
@@ -167,12 +170,15 @@ private func generateCompletionTokenStream(
 
                     let cache =
                         existingCache ?? context.model.newCache(parameters: generateParameters)
-
+                    // Create modified parameters to prevent TokenIterator quantization
+                    var iteratorParameters = generateParameters
+                    iteratorParameters.quantizedKVStart = Int.max
+                    
                     let iterator = try TokenIterator(
                         input: input,
                         model: context.model,
                         cache: cache,
-                        parameters: generateParameters
+                        parameters: iteratorParameters
                     )
 
                     var allGeneratedTokens: [Int] = []
@@ -196,7 +202,7 @@ private func generateCompletionTokenStream(
                             modelKey: modelContainer.configuration.name,
                             tokens: fullTokens,
                             kvCaches: cache,
-                            parameters: generateParameters,
+                            parameters: originalGenerateParameters,
                             model: context.model
                         )
                     }
